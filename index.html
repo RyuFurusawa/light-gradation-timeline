@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>光のグラデーション・タイムライン（HDR対応）</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; height: 100%; }
+  #stage { position: fixed; inset: 0; }
+  /* HDRレンダラ用キャンバス（背景を塗る）。CSSレンダラ時は透明のまま */
+  #gpu { position: fixed; inset: 0; width: 100%; height: 100%; display: none; z-index: 0; }
+  /* UI・リングを描くp5キャンバスは透明で最前面手前に重ねる */
+  .bar {
+    position: absolute; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 8px 10px; border-radius: 14px;
+    background: rgba(15,15,18,0.6); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.16);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.3);
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    color: #f2f2f2; z-index: 10; user-select: none;
+  }
+  .bar button {
+    padding: 7px 12px; border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 9px; background: rgba(255,255,255,0.08); color: #f2f2f2;
+    cursor: pointer; font-size: 13px; line-height: 1;
+  }
+  .bar button:hover { background: rgba(255,255,255,0.18); }
+  .bar button.active { background: #f5f5f5; color: #111; border-color: #f5f5f5; }
+  .bar span { font-size: 12.5px; color: #d8d8d8; }
+  .bar input[type=number] {
+    width: 60px; padding: 6px 8px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3);
+    color: #fff; font-size: 13px; text-align: right;
+  }
+  .bar input[type=range] { width: 130px; accent-color: #f5f5f5; }
+  #topBar { top: 14px; left: 50%; transform: translateX(-50%); }
+  #timeBar { top: 70px; left: 50%; transform: translateX(-50%); }
+  #colorBar { bottom: 16px; left: 50%; transform: translateX(-50%); }
+  body:not(.narrowLayout) #colorBar { flex-wrap: nowrap; max-width: 96vw; }
+  #viewBar { top: 126px; left: 50%; transform: translateX(-50%); }
+  .segGroup { display: flex; border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; overflow: hidden; }
+  .segGroup button { border: none !important; border-radius: 0 !important; }
+  .segGroup button + button { border-left: 1px solid rgba(255,255,255,0.18) !important; }
+  canvas.p5Canvas { position: relative; z-index: 1; touch-action: none; }
+  @media (pointer: coarse) {
+    .bar { gap: 10px; padding: 10px 12px; max-width: 94vw; }
+    .bar button { padding: 12px 16px; font-size: 15px; border-radius: 11px; }
+    .bar span { font-size: 14px; }
+    .bar input[type=number] { width: 72px; padding: 10px; font-size: 15px; }
+    .bar input[type=range] { width: 30vw; min-width: 100px; }
+  }
+  #hamBtn {
+    position: fixed; top: 14px; left: 14px; z-index: 14;
+    width: 44px; height: 44px; border-radius: 12px;
+    background: rgba(15,15,18,0.6); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.22);
+    cursor: pointer; padding: 0;
+  }
+  #hamBtn span { display: block; height: 2px; margin: 5px 9px; border-radius: 2px; background: #f2f2f2; }
+  #menuStack {
+    position: fixed; top: 66px; left: 14px; z-index: 11;
+    max-height: 76vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #menuStack .bar {
+    position: static !important; transform: none !important;
+    left: auto; right: auto; top: auto; bottom: auto;
+    flex-direction: column !important; align-items: stretch; flex-wrap: nowrap !important;
+    max-width: none; width: 220px;
+  }
+  #menuStack .bar button { padding: 13px 16px; font-size: 15px; }
+  body.menuClosed #menuStack { display: none; }
+  #hamBtn { display: block; }
+  /* 狭い画面：時間制御は上、色設定は最下部、左右トグルは端に */
+  body.narrowLayout #timeBar { top: 66px; left: 8px; right: 8px; transform: none !important; }
+  body.narrowLayout #colorBar {
+    left: 8px !important; right: 8px; transform: none !important;
+    bottom: 10px; max-height: 40vh; overflow-y: auto;
+  }
+  body.narrowLayout #viewBar { top: 118px; left: 8px; right: 8px; transform: none !important; }
+  #fsBtn {
+    position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%); z-index: 12;
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 20px; border-radius: 24px;
+    background: rgba(15,15,18,0.6); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.28); color: #fff;
+    font-size: 15px; line-height: 1; font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+  }
+  #fsBtn:hover { background: rgba(255,255,255,0.2); }
+  body.narrowLayout #fsBtn { bottom: 132px; top: auto; padding: 10px 16px; font-size: 14px; }
+  #infoBtn {
+    position: fixed; top: 14px; right: 14px; z-index: 12;
+    width: 40px; height: 40px; border-radius: 50%;
+    background: rgba(15,15,18,0.55); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.28); color: #fff;
+    font: italic bold 19px Georgia, "Times New Roman", serif;
+    cursor: pointer; box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  }
+  #infoBtn:hover { background: rgba(255,255,255,0.22); }
+  #infoPanel {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    color: #fff; overflow-y: auto; cursor: pointer;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+  }
+  #infoPanel .inner {
+    max-width: 700px; margin: 5vh auto 8vh; padding: 30px 34px 40px;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 22px; box-shadow: 0 12px 60px rgba(0,0,0,0.45);
+    cursor: auto;
+  }
+  #infoPanel h2 { font-size: 18px; margin: 0 0 4px; letter-spacing: 0.06em; font-weight: 600; }
+  #infoPanel .sub { font-size: 12px; color: rgba(255,255,255,0.55); margin: 0 0 18px; }
+  #infoPanel h3 {
+    font-size: 14px; margin: 24px 0 8px; color: #cfe6ff;
+    letter-spacing: 0.08em; font-weight: 600;
+    border-bottom: 1px solid rgba(255,255,255,0.14); padding-bottom: 6px;
+  }
+  #infoPanel ul { padding-left: 1.3em; margin: 6px 0; }
+  #infoPanel li { font-size: 13.5px; line-height: 1.95; color: rgba(255,255,255,0.92); margin: 2px 0; }
+  #infoPanel b { color: #fff; font-weight: 600; }
+  #infoPanel .closeHint { text-align: center; font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 26px; }
+  #errbox {
+    position: absolute; left: 12px; top: 12px; z-index: 99; display: none;
+    max-width: 60vw; padding: 10px 12px; border-radius: 10px;
+    background: rgba(120,0,0,0.85); color: #fff;
+    font: 12px/1.5 monospace; white-space: pre-wrap;
+  }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+</head>
+<body>
+<canvas id="gpu"></canvas>
+<div id="errbox"></div>
+<script>
+/* =========================================================
+   光のグラデーション・タイムライン（HDR対応 / 三段フォールバック）
+   第一段 WebGPU + extended tone mapping … 真のHDR（白を超える光）
+   第二段 Display P3 … 広色域SDR（CSS背景）
+   第三段 sRGB … 通常表示
+   起動時に能力検出して最良の一つを選ぶ。補間ロジックは全段共通。
+   ========================================================= */
+
+window.addEventListener('error', function (ev) {
+  var b = document.getElementById('errbox');
+  b.style.display = 'block';
+  b.textContent = 'JSエラー: ' + ev.message + '\n' + (ev.filename || '') + ' : ' + ev.lineno;
+});
+
+let points = [];
+let mode = 'hsb';            // step | hsb | rgbLight | rgbValue | oklch
+let loopDur = 12;
+let hdrGain = 1.6;          // HDR時の輝度倍率（SDR白=1.0を超える持ち上げ）
+let t0 = 0, paused = false, pausedAt = 0;
+
+let cx, cy, R, hitR = 24, isCoarse = false;
+let dragIdx = -1, dragDelete = false, pressX = 0, pressY = 0, movedFar = false;
+let lastTapT = -99999, lastTapX = 0, lastTapY = 0;
+let dragPlayhead = false;
+let dragXYIdx = -1, dragXY_Y = 0;   // xy図上の色点ドラッグ
+let playMode = false, playHintT = 0, wasFs = false;
+
+let renderer = null;        // {kind, draw(rgb)}
+let picker, pickTarget = -1;
+let lumaSnapshot = null;     // 輝度統一前の色スナップショット（元に戻す用）
+let showLumaCheck = false;   // 輝度検証：中央にグレー基準面を表示
+let showXY = false;          // xy色度図の表示
+let xyBuf = null, xyBufKey = '';
+let infoBtn = null, infoPanel = null;
+let hamBtn = null, menuOpen = false, isNarrow = false;
+let fsBtn = null;
+let topBar, timeBar, colorBar, viewBar, pauseBtn, durNum, durSlider, gainNum, gainWrap, restoreBtn = null, checkBtn, xyBtn, modeBtns = {};
+let lumaSegBtns = {}, lumaMode = 'none';
+
+/* ---------------- p5 ---------------- */
+function setup() {
+  let c = createCanvas(windowWidth, windowHeight);
+  c.class('p5Canvas');
+  layout();
+  textFont('system-ui, sans-serif');
+
+  // 初期値：光の三原色（赤・緑・青）
+  points.push({ ang: -HALF_PI,                r: 255, g: 0,   b: 0   });
+  points.push({ ang: -HALF_PI + TWO_PI / 3,   r: 0,   g: 255, b: 0   });
+  points.push({ ang: -HALF_PI + TWO_PI * 2/3, r: 0,   g: 0,   b: 255 });
+
+  isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  if (isCoarse) { hitR = 36; }
+
+  picker = document.createElement('input');
+  picker.type = 'color';
+  picker.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;border:0;padding:0;pointer-events:none;z-index:5;';
+  document.body.appendChild(picker);
+  picker.addEventListener('input', function () {
+    if (pickTarget >= 0 && pickTarget < points.length) {
+      let c2 = hexToRgb(picker.value);
+      points[pickTarget].r = c2[0]; points[pickTarget].g = c2[1]; points[pickTarget].b = c2[2];
+    }
+  });
+
+  buildUI();
+  t0 = millis();
+
+  // レンダラを検出・初期化（非同期）。決まるまではsRGBで暫定描画
+  renderer = makeCssRenderer(false);
+  refreshRenderer();
+
+  // ディスプレイ環境の変化（HDR⇄SDRモニタ間の移動、表示モード変更）を監視して
+  // レンダラとHDRスライダーの表示を動的に追従させる
+  if (window.matchMedia) {
+    try {
+      const mq = window.matchMedia('(dynamic-range: high)');
+      if (mq.addEventListener) { mq.addEventListener('change', refreshRenderer); }
+      else if (mq.addListener) { mq.addListener(refreshRenderer); }
+    } catch (e) { /* 監視非対応環境では初回判定のみ */ }
+  }
+
+  noLoop();
+  setInterval(function () { try { redraw(); } catch (err) { showErr(err); } }, 33);
+}
+
+function showErr(err) {
+  var b = document.getElementById('errbox');
+  b.style.display = 'block';
+  b.textContent = 'エラー: ' + (err && err.message ? err.message : String(err)) + '\n' + (err && err.stack ? err.stack.split('\n')[1] : '');
+}
+
+function layout() { cx = width / 2; cy = height / 2; R = min(width, height) * 0.30; }
+
+function windowResized() { resizeCanvas(windowWidth, windowHeight); layout(); resizeGpu(); applyResponsive(); }
+
+function resizeGpu() {
+  let g = document.getElementById('gpu');
+  if (renderer && renderer.kind === 'HDR') {
+    let dpr = window.devicePixelRatio || 1;
+    g.width = Math.floor(windowWidth * dpr);
+    g.height = Math.floor(windowHeight * dpr);
+  }
+}
+
+function getPhase() {
+  let now = paused ? pausedAt : millis();
+  let p = ((now - t0) / 1000) / loopDur;
+  return p - Math.floor(p);
+}
+
+/* ---------------- ループ ---------------- */
+function draw() {
+  let fs = !!fullscreen();
+  if (fs !== wasFs) { resizeCanvas(windowWidth, windowHeight); layout(); resizeGpu(); wasFs = fs; }
+
+  let sorted = sortPoints();
+  let a = getPhase() * TWO_PI - HALF_PI;
+  let cur = sampleAt(a, sorted);
+
+  // 現在色を選ばれたレンダラで画面全体に描く（HDR失敗時はP3/sRGBへ自動降格）
+  try {
+    renderer.draw(cur);
+  } catch (e) {
+    const p3 = !!(window.matchMedia && window.matchMedia('(color-gamut: p3)').matches);
+    renderer = makeCssRenderer(p3);
+    renderer.draw(cur);
+  }
+  clear();   // p5キャンバスは透明化（背景はレンダラが担当）
+
+  if (playMode) {
+    if (showLumaCheck) { drawLumaCheck(); }
+    return;
+  }
+
+  drawRing(sorted);
+  drawPlayhead(a);
+  drawPoints();
+  if (showLumaCheck) { drawLumaCheck(); }
+  if (showXY) { drawXYDiagram(sorted, cur); }
+
+  let diag = 'frame ' + frameCount + ' / t ' + nf(millis()/1000, 1, 1) + 's / ' + renderer.kind + (renderer.kind === 'HDR' ? ('  gain ' + nf(hdrGain, 1, 2)) : '');
+  push(); textAlign(RIGHT, BOTTOM); textSize(11);
+  fill(0, 140); noStroke(); text(diag, width - 11, height - 9);
+  fill(255, 200); text(diag, width - 12, height - 10);
+  pop();
+}
+
+/* ---------------- 共通ロジック ---------------- */
+function wrapAng(x) { return ((x % TWO_PI) + TWO_PI) % TWO_PI; }
+
+function sortPoints() {
+  let arr = [];
+  for (let i = 0; i < points.length; i++) { arr.push({ i: i, a: wrapAng(points[i].ang) }); }
+  arr.sort(function (x, y) { return x.a - y.a; });
+  return arr;
+}
+
+function sampleAt(angle, sorted) {
+  let A = wrapAng(angle), n = sorted.length;
+  if (n === 1) { let p = points[sorted[0].i]; return [p.r, p.g, p.b]; }
+  let idx = -1;
+  for (let k = 0; k < n; k++) { if (sorted[k].a <= A) { idx = k; } }
+  let cur, nxt;
+  if (idx === -1) { cur = sorted[n - 1]; nxt = sorted[0]; }
+  else { cur = sorted[idx]; nxt = sorted[(idx + 1) % n]; }
+  let span = wrapAng(nxt.a - cur.a);
+  if (span === 0) { span = TWO_PI; }
+  let f = wrapAng(A - cur.a) / span;
+  return interp(points[cur.i], points[nxt.i], f);
+}
+
+function interp(pa, pb, f) {
+  if (mode === 'step') { return [pa.r, pa.g, pa.b]; }
+  if (mode === 'rgbLight') {
+    return [
+      l2s(lerp(s2l(pa.r/255), s2l(pb.r/255), f)) * 255,
+      l2s(lerp(s2l(pa.g/255), s2l(pb.g/255), f)) * 255,
+      l2s(lerp(s2l(pa.b/255), s2l(pb.b/255), f)) * 255
+    ];
+  }
+  if (mode === 'rgbValue') { return [lerp(pa.r, pb.r, f), lerp(pa.g, pb.g, f), lerp(pa.b, pb.b, f)]; }
+  if (mode === 'hsb') {
+    let A = rgb2hsv(pa.r, pa.g, pa.b), B = rgb2hsv(pb.r, pb.g, pb.b);
+    // 無彩色（S≈0）の色相は「無力」(CSS Color 4)：相手の色相を引き継ぐ
+    if (A[1] < 1e-4) { A[0] = B[0]; }
+    if (B[1] < 1e-4) { B[0] = A[0]; }
+    let dh = ((B[0] - A[0] + 540) % 360) - 180;
+    return hsv2rgb(A[0] + dh * f, lerp(A[1], B[1], f), lerp(A[2], B[2], f));
+  }
+  if (mode === 'oklabLin') {
+    // OKLab空間上の直線補間（中間混色的：補色間は無彩軸近くを通る）
+    let A = rgb2oklab(pa.r, pa.g, pa.b), B = rgb2oklab(pb.r, pb.g, pb.b);
+    return oklab2rgb(lerp(A[0], B[0], f), lerp(A[1], B[1], f), lerp(A[2], B[2], f));
+  }
+  if (mode === 'cielabLin') {
+    // CIELab空間上の直線補間
+    let A = rgb2lab(pa.r, pa.g, pa.b), B = rgb2lab(pb.r, pb.g, pb.b);
+    return lab2rgb(lerp(A[0], B[0], f), lerp(A[1], B[1], f), lerp(A[2], B[2], f));
+  }
+  if (mode === 'cielch') {
+    let A = rgb2lch(pa.r, pa.g, pa.b), B = rgb2lch(pb.r, pb.g, pb.b);
+    if (A[1] < 0.5) { A[2] = B[2]; }   // 無力色相の修正（C*スケールに合わせたε）
+    if (B[1] < 0.5) { B[2] = A[2]; }
+    let dh = ((B[2] - A[2] + 540) % 360) - 180;
+    return lch2rgb(lerp(A[0], B[0], f), lerp(A[1], B[1], f), A[2] + dh * f);
+  }
+  // oklch（色相回転）
+  let A = rgb2oklch(pa.r, pa.g, pa.b);
+  let B = rgb2oklch(pb.r, pb.g, pb.b);
+  if (A[1] < 0.002) { A[2] = B[2]; }   // 無力色相の修正
+  if (B[1] < 0.002) { B[2] = A[2]; }
+  let dh = ((B[2] - A[2] + 540) % 360) - 180;
+  return oklch2rgb(lerp(A[0], B[0], f), lerp(A[1], B[1], f), A[2] + dh * f);
+}
+
+function s2l(c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+function l2s(c) { c = constrain(c, 0, 1); return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1 / 2.4) - 0.055; }
+
+function rgb2hsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  let mx = max(r, g, b), mn = min(r, g, b), d = mx - mn, h = 0;
+  if (d !== 0) {
+    if (mx === r) { h = ((g - b) / d) % 6; }
+    else if (mx === g) { h = (b - r) / d + 2; }
+    else { h = (r - g) / d + 4; }
+    h *= 60; if (h < 0) { h += 360; }
+  }
+  return [h, mx === 0 ? 0 : d / mx, mx];
+}
+function hsv2rgb(h, s, v) {
+  h = ((h % 360) + 360) % 360;
+  let c = v * s, x = c * (1 - abs((h / 60) % 2 - 1)), m = v - c, r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+/* ---- CIELab / CIELCh (D65) ---- */
+function rgb2xyz(r, g, b) {
+  let R = s2l(r / 255), G = s2l(g / 255), B = s2l(b / 255);
+  let X = (0.4124564 * R + 0.3575761 * G + 0.1804375 * B) * 100;
+  let Y = (0.2126729 * R + 0.7151522 * G + 0.0721750 * B) * 100;
+  let Z = (0.0193339 * R + 0.1191920 * G + 0.9503041 * B) * 100;
+  return [X, Y, Z];
+}
+function fLab(t) { return t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116); }
+function finvLab(t) { let t3 = t * t * t; return t3 > 0.008856 ? t3 : (t - 16 / 116) / 7.787; }
+function rgb2lab(r, g, b) {
+  let xyz = rgb2xyz(r, g, b);
+  let fx = fLab(xyz[0] / 95.047), fy = fLab(xyz[1] / 100.0), fz = fLab(xyz[2] / 108.883);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+function lab2rgb(L, A, B) {
+  let fy = (L + 16) / 116, fx = fy + A / 500, fz = fy - B / 200;
+  let X = 95.047 * finvLab(fx) / 100, Y = 100.0 * finvLab(fy) / 100, Z = 108.883 * finvLab(fz) / 100;
+  let R = 3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z;
+  let G = -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z;
+  let B2 = 0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z;
+  return [l2s(R) * 255, l2s(G) * 255, l2s(B2) * 255];
+}
+function rgb2lch(r, g, b) {
+  let lab = rgb2lab(r, g, b);
+  let C = sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+  let h = atan2(lab[2], lab[1]) * 180 / PI; if (h < 0) { h += 360; }
+  return [lab[0], C, h];
+}
+function lch2rgb(L, C, h) {
+  return lab2rgb(L, C * cos(h * PI / 180), C * sin(h * PI / 180));
+}
+
+function rgb2oklab(r, g, b) {
+  let R = s2l(r/255), G = s2l(g/255), B = s2l(b/255);
+  let l = 0.4122214708*R + 0.5363325363*G + 0.0514459929*B;
+  let m = 0.2119034982*R + 0.6806995451*G + 0.1073969566*B;
+  let s = 0.0883024619*R + 0.2817188376*G + 0.6299787005*B;
+  let l_ = Math.cbrt(l), m_ = Math.cbrt(m), s_ = Math.cbrt(s);
+  return [
+    0.2104542553*l_ + 0.7936177850*m_ - 0.0040720468*s_,
+    1.9779984951*l_ - 2.4285922050*m_ + 0.4505937099*s_,
+    0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_
+  ];
+}
+function oklab2rgb(L, a, b) {
+  let l_ = L + 0.3963377774*a + 0.2158037573*b;
+  let m_ = L - 0.1055613458*a - 0.0638541728*b;
+  let s_ = L - 0.0894841775*a - 1.2914855480*b;
+  let l = l_*l_*l_, m = m_*m_*m_, s = s_*s_*s_;
+  let R = 4.0767416621*l - 3.3077115913*m + 0.2309699292*s;
+  let G = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s;
+  let B = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s;
+  return [l2s(R) * 255, l2s(G) * 255, l2s(B) * 255];
+}
+function rgb2oklch(r, g, b) {
+  let o = rgb2oklab(r, g, b);
+  let C = sqrt(o[1]*o[1] + o[2]*o[2]);
+  let h = atan2(o[2], o[1]) * 180 / PI; if (h < 0) { h += 360; }
+  return [o[0], C, h];
+}
+function oklch2rgb(L, C, h) { return oklab2rgb(L, C * cos(h*PI/180), C * sin(h*PI/180)); }
+
+// 拡張sRGBエンコード：1.0を超える値にも同じ伝達関数を延長して適用
+function encExt(v) {
+  v = Math.max(v, 0);
+  return v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+
+function hexToRgb(hx) {
+  hx = hx.replace('#', '');
+  return [parseInt(hx.substr(0,2),16), parseInt(hx.substr(2,2),16), parseInt(hx.substr(4,2),16)];
+}
+function hex2(n) { let s = Math.round(constrain(n, 0, 255)).toString(16); return s.length < 2 ? '0' + s : s; }
+
+/* ---------------- レンダラ検出 ---------------- */
+function refreshRenderer() {
+  detectAndInitRenderer().then(function (r) {
+    renderer = r;
+    if (gainWrap) { gainWrap.style('display', r.kind === 'HDR' ? 'flex' : 'none'); }
+    resizeGpu();
+  }).catch(function (e) { showErr(e); });
+}
+
+async function detectAndInitRenderer() {
+  // ディスプレイ（現在の表示環境）が実際にHDRを表示できるかを最初に判定。
+  // WebGPUのHDR設定はSDRディスプレイでも「成功」してしまう（出力が頭打ちになるだけ）ため、
+  // dynamic-range メディアクエリでの能力判定が必須。
+  const hdrDisplay = !!(window.matchMedia && window.matchMedia('(dynamic-range: high)').matches);
+  if (hdrDisplay && navigator.gpu) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        const device = await adapter.requestDevice();
+        const canvas = document.getElementById('gpu');
+        const ctx = canvas.getContext('webgpu');
+        // HDRには16bit float形式が必須（8bit unormは1.0で頭打ち＝HDRにならない）
+        const format = 'rgba16float';
+        ctx.configure({ device, format, alphaMode: 'opaque', toneMapping: { mode: 'extended' }, colorSpace: 'srgb' });
+        canvas.style.display = 'block';
+        return makeWebGPURenderer(device, ctx, format);
+      }
+    } catch (e) { /* 次段へ */ }
+  }
+  const p3 = !!(window.matchMedia && window.matchMedia('(color-gamut: p3)').matches
+    && window.CSS && CSS.supports('color', 'color(display-p3 1 1 1)'));
+  return makeCssRenderer(p3);
+}
+
+function makeCssRenderer(wide) {
+  document.getElementById('gpu').style.display = 'none';
+  return {
+    kind: wide ? 'P3広色域' : 'sRGB',
+    draw: function (rgb) {
+      let r = constrain(rgb[0], 0, 255), g = constrain(rgb[1], 0, 255), b = constrain(rgb[2], 0, 255);
+      if (wide) {
+        document.body.style.backgroundColor = 'color(display-p3 ' + (r/255).toFixed(4) + ' ' + (g/255).toFixed(4) + ' ' + (b/255).toFixed(4) + ')';
+      } else {
+        document.body.style.backgroundColor = 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+      }
+    }
+  };
+}
+
+function makeWebGPURenderer(device, ctx, format) {
+  const shader = device.createShaderModule({ code:
+    'struct U {\n' +
+    '  bg : vec4<f32>,\n' +
+    '  gray : vec4<f32>,\n' +
+    '  rect : vec4<f32>,\n' +
+    '  flags : vec4<f32>,\n' +
+    '};\n' +
+    '@group(0) @binding(0) var<uniform> u : U;\n' +
+    '@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {\n' +
+    '  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0,-3.0), vec2<f32>(-1.0,1.0), vec2<f32>(3.0,1.0));\n' +
+    '  return vec4<f32>(p[i], 0.0, 1.0);\n' +
+    '}\n' +
+    '@fragment fn fs(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {\n' +
+    '  if (u.flags.x > 0.5) {\n' +
+    '    let d = abs(fc.xy - u.rect.xy);\n' +
+    '    if (d.x <= u.rect.z && d.y <= u.rect.w) { return u.gray; }\n' +
+    '  }\n' +
+    '  return u.bg;\n' +
+    '}\n'
+  });
+  const uniformBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const bgl = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }] });
+  const bindGroup = device.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: uniformBuf } }] });
+  const pipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+    vertex: { module: shader, entryPoint: 'vs' },
+    fragment: { module: shader, entryPoint: 'fs', targets: [{ format: format }] },
+    primitive: { topology: 'triangle-list' }
+  });
+  resizeGpu();
+  return {
+    kind: 'HDR',
+    draw: function (rgb) {
+      // 背景：線形値をhdrGain倍で持ち上げ（グレーと同一スケール＝輝度比較が正しく成立）
+      let lr = s2l(constrain(rgb[0], 0, 255) / 255);
+      let lg = s2l(constrain(rgb[1], 0, 255) / 255);
+      let lb = s2l(constrain(rgb[2], 0, 255) / 255);
+      let bgR = encExt(lr * hdrGain), bgG = encExt(lg * hdrGain), bgB = encExt(lb * hdrGain);
+
+      let gR = 0, gG = 0, gB = 0, showGray = 0.0, rcx = 0, rcy = 0, rhw = 0, rhh = 0;
+      const gpu = document.getElementById('gpu');
+      if (showLumaCheck) {
+        showGray = 1.0;
+        let gg = grayForMode();  // [0..255] のSDRグレー（R=G=B）
+        // グレーは正規化せず、背景と同じ線形スケール(hdrGain倍)で素直に持ち上げる
+        let gl = s2l(constrain(gg[0], 0, 255) / 255) * hdrGain;
+        let gv = encExt(gl);
+        gR = gv; gG = gv; gB = gv;
+        let glay = grayLayout();
+        let dpr = window.devicePixelRatio || 1;
+        rcx = cx * dpr; rcy = glay[1] * dpr; rhw = (glay[0] / 2) * dpr; rhh = (glay[0] / 2) * dpr;
+      }
+      const data = new Float32Array([
+        bgR, bgG, bgB, 1.0,
+        gR, gG, gB, 1.0,
+        rcx, rcy, rhw, rhh,
+        showGray, 0.0, 0.0, 0.0
+      ]);
+      device.queue.writeBuffer(uniformBuf, 0, data);
+      const enc = device.createCommandEncoder();
+      const view = ctx.getCurrentTexture().createView();
+      const pass = enc.beginRenderPass({ colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+      pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.draw(3); pass.end();
+      device.queue.submit([enc.finish()]);
+    }
+  };
+}
+
+function drawRing(sorted) {
+  noFill(); stroke(0, 90); strokeWeight(36); circle(cx, cy, R * 2);
+  let steps = 360; strokeWeight(26); strokeCap(ROUND);
+  for (let k = 0; k < steps; k++) {
+    let a0 = k / steps * TWO_PI, a1 = (k + 1.35) / steps * TWO_PI;
+    let c = sampleAt(a0 + 0.0001, sorted);
+    stroke(c[0], c[1], c[2]);
+    line(cx + cos(a0) * R, cy + sin(a0) * R, cx + cos(a1) * R, cy + sin(a1) * R);
+  }
+}
+function drawPlayhead(a) {
+  let x0 = cx + cos(a) * (R - 26), y0 = cy + sin(a) * (R - 26);
+  let x1 = cx + cos(a) * (R + 26), y1 = cy + sin(a) * (R + 26);
+  stroke(0, 150); strokeWeight(6); line(x0, y0, x1, y1);
+  stroke(255); strokeWeight(2.5); line(x0, y0, x1, y1);
+  noStroke(); fill(255); circle(x1, y1, 11);
+  stroke(0, 150); strokeWeight(1.5); noFill(); circle(x1, y1, 11);
+}
+function drawPoints() {
+  for (let i = 0; i < points.length; i++) {
+    let p = points[i];
+    let x = cx + cos(p.ang) * R, y = cy + sin(p.ang) * R;
+    let hovered = dist(mouseX, mouseY, x, y) < hitR;
+    let dragging = (i === dragIdx);
+    let base = isCoarse ? 19 : 14;
+    let rr = (dragging || hovered) ? base + 3 : base;
+    if (dragging && dragDelete) {
+      stroke(0, 160); strokeWeight(7); noFill(); circle(x, y, rr * 2 + 4);
+      stroke(255, 70, 70); strokeWeight(4); fill(p.r, p.g, p.b, 120); circle(x, y, rr * 2);
+      stroke(255); strokeWeight(3);
+      line(x - 7, y - 7, x + 7, y + 7); line(x - 7, y + 7, x + 7, y - 7);
+      drawOutlinedText('離すと削除', x, y - rr - 16, 13, 255);
+    } else {
+      stroke(0, 160); strokeWeight(6); noFill(); circle(x, y, rr * 2 + 3);
+      stroke(255); strokeWeight(3); fill(p.r, p.g, p.b); circle(x, y, rr * 2);
+    }
+  }
+}
+function drawOutlinedText(s, x, y, size, al) {
+  push(); textAlign(CENTER, CENTER); textSize(size); textStyle(BOLD);
+  fill(0, al * 0.8); noStroke(); text(s, x + 1, y + 1);
+  fill(255, al); text(s, x, y); pop();
+}
+
+/* ---------------- 操作 ---------------- */
+function isCanvasEvent(e) { return !e || !e.target || e.target.tagName === 'CANVAS'; }
+
+function mousePressed(e) {
+  if (!isCanvasEvent(e)) { return; }
+  if (playMode) { exitPlay(); return; }
+  pressX = mouseX; pressY = mouseY; movedFar = false;
+  dragIdx = -1; dragDelete = false; dragPlayhead = false;
+  // 再生ヘッド（針先のノブ）のドラッグ判定は色点より優先
+  let pha = getPhase() * TWO_PI - HALF_PI;
+  let phx = cx + cos(pha) * (R + 26), phy = cy + sin(pha) * (R + 26);
+  if (dist(mouseX, mouseY, phx, phy) < hitR) { dragPlayhead = true; return; }
+  // xy色度図の色点ドラッグ（xy図のみ表示のとき）
+  dragXYIdx = -1;
+  if (showXY && !showLumaCheck) {
+    let ly = xyLayout();
+    for (let i = 0; i < points.length; i++) {
+      let xy = xyFromRgb(points[i].r, points[i].g, points[i].b);
+      let X = xyPixX(xy[0], ly[0], ly[2]), Y = xyPixY(xy[1], ly[1], ly[3]);
+      if (dist(mouseX, mouseY, X, Y) < Math.max(15, hitR * 0.6)) {
+        dragXYIdx = i;
+        dragXY_Y = rgb2xyz(points[i].r, points[i].g, points[i].b)[1] / 100;
+        return;
+      }
+    }
+  }
+  for (let i = 0; i < points.length; i++) {
+    let x = cx + cos(points[i].ang) * R, y = cy + sin(points[i].ang) * R;
+    if (dist(mouseX, mouseY, x, y) < hitR) { dragIdx = i; break; }
+  }
+}
+function mouseDragged(e) {
+  if (dragPlayhead) {
+    movedFar = true;
+    let ang = atan2(mouseY - cy, mouseX - cx);
+    let p = wrapAng(ang + HALF_PI) / TWO_PI;
+    let now = paused ? pausedAt : millis();
+    t0 = now - p * loopDur * 1000;
+    return;
+  }
+  if (dragXYIdx >= 0) {
+    movedFar = true;
+    let ly = xyLayout();
+    let x = (mouseX - ly[0]) / ly[2] * 0.8;
+    let y = (ly[1] + ly[3] - mouseY) / ly[3] * 0.9;
+    x = constrain(x, 0.0, 0.8); y = constrain(y, 0.005, 0.9);
+    let rgb = xyYfit(x, y, dragXY_Y);   // 輝度Yを保ったまま色度だけ変更
+    points[dragXYIdx].r = rgb[0]; points[dragXYIdx].g = rgb[1]; points[dragXYIdx].b = rgb[2];
+    return;
+  }
+  if (dist(mouseX, mouseY, pressX, pressY) > 7) { movedFar = true; }
+  if (dragIdx < 0 || !movedFar) { return; }
+  points[dragIdx].ang = atan2(mouseY - cy, mouseX - cx);
+  dragDelete = dist(mouseX, mouseY, cx, cy) > R * 1.35;
+}
+function mouseReleased(e) {
+  if (dragPlayhead) { dragPlayhead = false; movedFar = false; return; }
+  if (dragXYIdx >= 0) { dragXYIdx = -1; movedFar = false; return; }
+  let wasTap = !movedFar;
+  if (dragIdx >= 0 && dragDelete && points.length > 2) { points.splice(dragIdx, 1); wasTap = false; }
+  dragIdx = -1; dragDelete = false;
+  if (wasTap && !playMode) { handleTap(mouseX, mouseY); }
+}
+
+function handleTap(x, y) {
+  for (let i = 0; i < points.length; i++) {
+    let px = cx + cos(points[i].ang) * R, py = cy + sin(points[i].ang) * R;
+    if (dist(x, y, px, py) < hitR) {
+      let now = millis();
+      if (now - lastTapT < 400 && dist(x, y, lastTapX, lastTapY) < 40) { lastTapT = -99999; openPickerAt(i, px, py); }
+      else { lastTapT = now; lastTapX = x; lastTapY = y; }
+      return;
+    }
+  }
+  let d = dist(x, y, cx, cy);
+  if (abs(d - R) < hitR + 8) {
+    let ang = atan2(y - cy, x - cx);
+    let c = sampleAt(ang, sortPoints());
+    points.push({ ang: ang, r: c[0], g: c[1], b: c[2] });
+  }
+}
+
+function touchStarted(e) { if (!isCanvasEvent(e)) { return; } mousePressed(e); return false; }
+function touchMoved(e) { if (!isCanvasEvent(e)) { return; } mouseDragged(e); return false; }
+function touchEnded(e) { if (!isCanvasEvent(e)) { return; } mouseReleased(e); return false; }
+
+function openPickerAt(i, x, y) {
+  pickTarget = i;
+  let p = points[i];
+  picker.style.left = x + 'px'; picker.style.top = y + 'px';
+  picker.value = '#' + hex2(p.r) + hex2(p.g) + hex2(p.b);
+  picker.click();
+}
+
+function keyPressed() {
+  if (key === 'f' || key === 'F') { enterPlay(); }
+  if (key === ' ') { togglePause(); }
+  if (keyCode === ESCAPE) { exitPlay(); if (infoPanel) { infoPanel.style.display = 'none'; } }
+}
+
+function enterPlay() {
+  playMode = true;
+  topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
+  if (infoBtn) { infoBtn.style.display = 'none'; }
+  if (infoPanel) { infoPanel.style.display = 'none'; }
+  if (hamBtn) { hamBtn.style.display = 'none'; }
+  if (fsBtn) { fsBtn.style.display = 'none'; }
+  try { fullscreen(true); } catch (err) {}
+}
+function exitPlay() {
+  if (!playMode) { return; }
+  playMode = false; topBar.show(); timeBar.show(); colorBar.show(); viewBar.show();
+  if (infoBtn) { infoBtn.style.display = 'block'; }
+  if (fsBtn) { fsBtn.style.display = 'flex'; }
+  if (hamBtn) { hamBtn.style.display = ''; }   // インライン解除→CSS(body.narrow)に制御を戻す
+  applyResponsive();
+  try { fullscreen(false); } catch (err) {}
+}
+function togglePause() {
+  if (!paused) { pausedAt = millis(); paused = true; }
+  else { t0 += millis() - pausedAt; paused = false; }
+  pauseBtn.html(paused ? '▶' : '⏸');
+}
+
+/* ---------------- UI ---------------- */
+function setDur(v) {
+  if (isNaN(v)) { return; }
+  v = constrain(v, 0.5, 120);
+  let p = getPhase();
+  loopDur = v;
+  let now = paused ? pausedAt : millis();
+  t0 = now - p * loopDur * 1000;
+  durNum.value(v); durSlider.value(v);
+}
+
+function equalizeLuma(kind) {
+  if (!lumaSnapshot) {
+    lumaSnapshot = points.map(function (p) { return { r: p.r, g: p.g, b: p.b }; });
+  }
+  let Ls = [];
+  for (let i = 0; i < points.length; i++) {
+    let o = rgb2oklch(points[i].r, points[i].g, points[i].b);
+    Ls.push(o[0]);
+  }
+  if (kind === 'maxc') {
+    // 各色点：色相Hはそのまま、彩度Cだけを色域上限へ。明度Lは変えない。
+    // 黒・白・グレー系（彩度がごく小さい無彩色）は彩度0のまま触らない。
+    for (let i = 0; i < points.length; i++) {
+      let o = rgb2oklch(points[i].r, points[i].g, points[i].b);
+      if (o[1] < 0.004) { continue; }   // 無彩色はスキップ
+      let maxC = maxChromaAt(o[0], o[2]);
+      let rgb = oklch2rgb(o[0], maxC, o[2]);
+      points[i].r = rgb[0]; points[i].g = rgb[1]; points[i].b = rgb[2];
+    }
+    updateLumaButtons();
+    return;
+  }
+  let target;
+  if (kind === 'min') {
+    target = Ls[0];
+    for (let i = 1; i < Ls.length; i++) { if (Ls[i] < target) { target = Ls[i]; } }
+  } else {
+    let sum = 0;
+    for (let i = 0; i < Ls.length; i++) { sum += Ls[i]; }
+    target = sum / Ls.length;
+  }
+  for (let i = 0; i < points.length; i++) {
+    let o = rgb2oklch(points[i].r, points[i].g, points[i].b);
+    let rgb = fitToGamut(target, o[1], o[2]);
+    points[i].r = rgb[0]; points[i].g = rgb[1]; points[i].b = rgb[2];
+  }
+  updateLumaButtons();
+}
+
+function fitToGamut(L, C, H) {
+  if (inGamut(L, C, H)) { return oklch2rgb(L, C, H); }
+  let lo = 0, hi = C;
+  for (let k = 0; k < 24; k++) {
+    let mid = (lo + hi) / 2;
+    if (inGamut(L, mid, H)) { lo = mid; } else { hi = mid; }
+  }
+  return oklch2rgb(L, lo, H);
+}
+// L・Hを保ったまま、その色相で色域内に収まる最大のCを探す（彩度最大化）
+function maxChromaAt(L, H) {
+  let lo = 0, hi = 0.5;
+  // まず域外に出る上限hiを見つける（既にCmaxが小さい色相にも対応）
+  while (inGamut(L, hi, H) && hi < 2.0) { hi *= 1.5; }
+  for (let k = 0; k < 28; k++) {
+    let mid = (lo + hi) / 2;
+    if (inGamut(L, mid, H)) { lo = mid; } else { hi = mid; }
+  }
+  return lo;
+}
+function inGamut(L, C, H) {
+  let a = C * cos(H * PI / 180), b = C * sin(H * PI / 180);
+  let l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  let m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  let s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+  let l = l_ * l_ * l_, m = m_ * m_ * m_, s = s_ * s_ * s_;
+  let R = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+  let G = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+  let B = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+  let eps = 0.0005;
+  return R >= -eps && R <= 1 + eps && G >= -eps && G <= 1 + eps && B >= -eps && B <= 1 + eps;
+}
+
+function restoreLuma() {
+  if (!lumaSnapshot) { return; }
+  for (let i = 0; i < points.length && i < lumaSnapshot.length; i++) {
+    points[i].r = lumaSnapshot[i].r;
+    points[i].g = lumaSnapshot[i].g;
+    points[i].b = lumaSnapshot[i].b;
+  }
+  lumaSnapshot = null;
+  updateLumaButtons();
+}
+
+function updateLumaButtons() {
+  if (!restoreBtn) { return; }
+  if (lumaSnapshot) { restoreBtn.style('display', 'inline-block'); }
+  else { restoreBtn.style('display', 'none'); }
+}
+
+// グレー基準面とxy図の共有レイアウト：両方表示なら円内を上下に等分
+function grayLayout() {
+  let both = showXY && !playMode;
+  let s = both ? R * 0.5 : R * 0.7;
+  let gy = both ? cy - R * 0.34 : cy;
+  return [s, gy];
+}
+
+function drawLumaCheck() {
+  let g = grayForMode();
+  let gl = grayLayout();
+  let s = gl[0], gy = gl[1];
+  // HDRレンダラのときは矩形をWebGPU側で描くので、p5では文字だけ
+  if (!renderer || renderer.kind !== 'HDR') {
+    push();
+    rectMode(CENTER);
+    noStroke();
+    fill(g[0], g[1], g[2]);
+    rect(cx, gy, s, s);
+    pop();
+  }
+  if (!playMode) {
+    push();
+    noStroke(); fill(0, 130);
+    textAlign(CENTER, CENTER); textSize(12); textStyle(NORMAL);
+    text(grayLabel, cx + 1, gy - s / 2 - 13);
+    fill(255, 210);
+    text(grayLabel, cx, gy - s / 2 - 14);
+    pop();
+  }
+}
+
+let grayLabel = '';
+// 現在の補間方式の「明度」定義に沿った平均から無彩色グレーを返す
+function grayForMode() {
+  let n = points.length;
+  if (mode === 'hsb') {
+    // HSBのB（明度値）平均。無彩色なのでR=G=B=V*255
+    let sum = 0;
+    for (let i = 0; i < n; i++) { sum += rgb2hsv(points[i].r, points[i].g, points[i].b)[2]; }
+    let v = sum / n;
+    grayLabel = 'HSB基準グレー（平均B=' + nf(v * 100, 1, 1) + '%）';
+    let c = v * 255;
+    return [c, c, c];
+  }
+  if (mode === 'rgbLight') {
+    // 線形光の相対輝度の平均 → 線形グレー → sRGB化
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      let Y = 0.2126 * s2l(points[i].r/255) + 0.7152 * s2l(points[i].g/255) + 0.0722 * s2l(points[i].b/255);
+      sum += Y;
+    }
+    let Y = sum / n;
+    grayLabel = '光量基準グレー（平均輝度Y=' + nf(Y, 1, 3) + '）';
+    let c = l2s(Y) * 255;
+    return [c, c, c];
+  }
+  if (mode === 'rgbValue') {
+    // sRGB画素値そのままの平均（R,G,Bの単純平均を明度とみなす）
+    let sum = 0;
+    for (let i = 0; i < n; i++) { sum += (points[i].r + points[i].g + points[i].b) / 3; }
+    let c = sum / n;
+    grayLabel = '画素値基準グレー（平均=' + nf(c, 1, 0) + '/255）';
+    return [c, c, c];
+  }
+  if (mode === 'cielch' || mode === 'cielabLin') {
+    let sum = 0;
+    for (let i = 0; i < n; i++) { sum += rgb2lab(points[i].r, points[i].g, points[i].b)[0]; }
+    let L = sum / n;
+    grayLabel = 'CIELab基準グレー（平均L*=' + nf(L, 1, 1) + '）';
+    return lab2rgb(L, 0, 0);
+  }
+  // oklch / step：OKLab-L 平均
+  let sum = 0;
+  for (let i = 0; i < n; i++) { sum += rgb2oklch(points[i].r, points[i].g, points[i].b)[0]; }
+  let L = sum / n;
+  grayLabel = 'OKLab基準グレー（平均L=' + nf(L, 1, 3) + '）';
+  return oklch2rgb(L, 0, 0);
+}
+
+/* ---- CIE xy 色度図 ---- */
+const XY_LOCUS = [
+  [0.1741,0.0050],[0.1738,0.0049],[0.1733,0.0048],[0.1726,0.0048],[0.1714,0.0051],
+  [0.1689,0.0069],[0.1644,0.0109],[0.1566,0.0177],[0.1440,0.0297],[0.1241,0.0578],
+  [0.0913,0.1327],[0.0454,0.2950],[0.0082,0.5384],[0.0139,0.7502],[0.0743,0.8338],
+  [0.1547,0.8059],[0.2296,0.7543],[0.3016,0.6923],[0.3731,0.6245],[0.4441,0.5547],
+  [0.5125,0.4866],[0.5752,0.4242],[0.6270,0.3725],[0.6658,0.3340],[0.6915,0.3083],
+  [0.7079,0.2920],[0.7190,0.2809],[0.7260,0.2740],[0.7300,0.2700],[0.7320,0.2680],
+  [0.7334,0.2666],[0.7344,0.2656],[0.7347,0.2653]
+];
+
+function xyFromRgb(r, g, b) {
+  let xyz = rgb2xyz(r, g, b);
+  let s = xyz[0] + xyz[1] + xyz[2];
+  if (s < 1e-6) { return [0.3127, 0.3290]; }  // 黒は色度が定義できないのでD65へ
+  return [xyz[0] / s, xyz[1] / s];
+}
+
+function insideLocus(x, y) {
+  let n = XY_LOCUS.length, inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    let xi = XY_LOCUS[i][0], yi = XY_LOCUS[i][1];
+    let xj = XY_LOCUS[j][0], yj = XY_LOCUS[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) { inside = !inside; }
+  }
+  return inside;
+}
+
+function xyPixX(x, dx, dw) { return dx + x / 0.8 * dw; }
+function xyPixY(y, dy, dh) { return dy + dh - y / 0.9 * dh; }
+
+function buildXYBuffer(dw, dh) {
+  let g = createGraphics(dw, dh);
+  g.pixelDensity(1);
+  g.loadPixels();   // 背景は透明のまま（馬蹄形の外は描かない）
+  for (let py = 0; py < dh; py++) {
+    for (let px = 0; px < dw; px++) {
+      let x = px / dw * 0.8, y = (dh - py) / dh * 0.9;
+      if (y <= 0.002) { continue; }
+      if (!insideLocus(x, y)) { continue; }
+      let X = x / y, Z = (1 - x - y) / y;
+      let R =  3.2404542 * X - 1.5371385 - 0.4985314 * Z;
+      let G = -0.9692660 * X + 1.8760108 + 0.0415560 * Z;
+      let B =  0.0556434 * X - 0.2040259 + 1.0572252 * Z;
+      let mx = Math.max(R, G, B);
+      if (mx <= 0) { continue; }
+      R = Math.max(R / mx, 0); G = Math.max(G / mx, 0); B = Math.max(B / mx, 0);
+      let idx = (py * dw + px) * 4;
+      g.pixels[idx] = l2s(R) * 255;
+      g.pixels[idx + 1] = l2s(G) * 255;
+      g.pixels[idx + 2] = l2s(B) * 255;
+      g.pixels[idx + 3] = 255;
+    }
+  }
+  g.updatePixels();
+  // 馬蹄形の輪郭（どんな背景色の上でも読めるよう黒＋白の二重線）
+  g.noFill();
+  g.stroke(0, 130); g.strokeWeight(2.5);
+  g.beginShape();
+  for (let i = 0; i < XY_LOCUS.length; i++) { g.vertex(xyPixX(XY_LOCUS[i][0], 0, dw), xyPixY(XY_LOCUS[i][1], 0, dh)); }
+  g.endShape(CLOSE);
+  g.stroke(255, 150); g.strokeWeight(1);
+  g.beginShape();
+  for (let i = 0; i < XY_LOCUS.length; i++) { g.vertex(xyPixX(XY_LOCUS[i][0], 0, dw), xyPixY(XY_LOCUS[i][1], 0, dh)); }
+  g.endShape(CLOSE);
+  // sRGB三角形とD65白色点
+  g.stroke(255, 170); g.strokeWeight(1.2); g.noFill();
+  let tr = [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]];
+  for (let i = 0; i < 3; i++) {
+    let a = tr[i], b = tr[(i + 1) % 3];
+    g.line(xyPixX(a[0], 0, dw), xyPixY(a[1], 0, dh), xyPixX(b[0], 0, dw), xyPixY(b[1], 0, dh));
+  }
+  let wx = xyPixX(0.3127, 0, dw), wy = xyPixY(0.3290, 0, dh);
+  g.stroke(255); g.strokeWeight(1.2);
+  g.line(wx - 4, wy, wx + 4, wy); g.line(wx, wy - 4, wx, wy + 4);
+  return g;
+}
+
+// xy図の現在レイアウト（描画とドラッグ判定で共有）
+function xyLayout() {
+  let dw, dh, dx, dy;
+  if (showLumaCheck) {
+    dh = Math.round(R * 0.60);
+    dw = Math.round(dh * 0.8 / 0.9);
+    dx = cx - dw / 2;
+    dy = Math.round(cy + R * 0.36 - dh / 2);
+  } else {
+    let Ru = R - 26;
+    dw = Math.round(Math.min(Ru * 1.32, 340));
+    dh = Math.round(dw * 0.9 / 0.8);
+    dx = cx - dw / 2;
+    dy = cy - Math.round(dh / 2);
+  }
+  return [dx, dy, dw, dh];
+}
+
+// xyY → linear sRGB（Y=輝度を保ったまま色度を動かすための変換）
+function xyYtoRgbLin(x, y, Y) {
+  if (y < 1e-4) { y = 1e-4; }
+  let X = x / y * Y, Z = (1 - x - y) / y * Y;
+  return [
+    3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z,
+    -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z,
+    0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z
+  ];
+}
+function inGamutLin(c) {
+  let e = 0.0005;
+  return c[0] >= -e && c[0] <= 1 + e && c[1] >= -e && c[1] <= 1 + e && c[2] >= -e && c[2] <= 1 + e;
+}
+// 輝度Yを保ったまま、色域外ならD65方向へ寄せて収める
+function xyYfit(x, y, Y) {
+  const wx = 0.3127, wy = 0.3290;
+  let t = 1.0;
+  if (!inGamutLin(xyYtoRgbLin(x, y, Y))) {
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 24; k++) {
+      let m = (lo + hi) / 2;
+      if (inGamutLin(xyYtoRgbLin(wx + (x - wx) * m, wy + (y - wy) * m, Y))) { lo = m; } else { hi = m; }
+    }
+    t = lo;
+  }
+  let lin = xyYtoRgbLin(wx + (x - wx) * t, wy + (y - wy) * t, Y);
+  return [l2s(Math.max(lin[0], 0)) * 255, l2s(Math.max(lin[1], 0)) * 255, l2s(Math.max(lin[2], 0)) * 255];
+}
+
+function drawXYDiagram(sorted, cur) {
+  let ly0 = xyLayout();
+  let dx = ly0[0], dy = ly0[1], dw = ly0[2], dh = ly0[3];
+  let key = dw + 'x' + dh;
+  if (!xyBuf || xyBufKey !== key) { xyBuf = buildXYBuffer(dw, dh); xyBufKey = key; }
+  push();
+  image(xyBuf, dx, dy);
+  // ループ一周分の軌跡（補間方式の幾何学がここに出る）
+  noFill(); stroke(255, 170); strokeWeight(1.5);
+  beginShape();
+  for (let k = 0; k <= 120; k++) {
+    let c = sampleAt(k / 120 * TWO_PI + 0.0001, sorted);
+    let xy = xyFromRgb(c[0], c[1], c[2]);
+    vertex(xyPixX(xy[0], dx, dw), xyPixY(xy[1], dy, dh));
+  }
+  endShape(CLOSE);
+  // 色点
+  for (let i = 0; i < points.length; i++) {
+    let p = points[i];
+    let xy = xyFromRgb(p.r, p.g, p.b);
+    let X = xyPixX(xy[0], dx, dw), Y = xyPixY(xy[1], dy, dh);
+    let interactive = showXY && !showLumaCheck;
+    let msz = (interactive && (i === dragXYIdx || dist(mouseX, mouseY, X, Y) < Math.max(15, hitR * 0.6))) ? 16 : 11;
+    stroke(0, 160); strokeWeight(4); fill(p.r, p.g, p.b); circle(X, Y, msz);
+    stroke(255); strokeWeight(1.5); noFill(); circle(X, Y, msz);
+  }
+  // 現在再生中の色（動く白リング）
+  let xy = xyFromRgb(cur[0], cur[1], cur[2]);
+  let X = xyPixX(xy[0], dx, dw), Y = xyPixY(xy[1], dy, dh);
+  stroke(0, 180); strokeWeight(5); noFill(); circle(X, Y, 17);
+  stroke(255); strokeWeight(2.5); circle(X, Y, 17);
+  drawOutlinedText('CIE xy 色度図', dx + dw / 2, dy + dh + 12, 12, 230);
+  pop();
+}
+
+function applyResponsive() {
+  if (playMode) { return; }
+  isNarrow = windowWidth <= 820;
+  // 補間方式は画面サイズを問わず常にハンバーガーへ収める
+  let stack = document.getElementById('menuStack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'menuStack';
+    document.body.appendChild(stack);
+  }
+  if (topBar && topBar.elt.parentNode !== stack) { stack.appendChild(topBar.elt); }
+  setMenuOpen(menuOpen);
+  // その他バーの配置だけを幅で切り替える（narrowLayoutクラス）
+  if (isNarrow) { document.body.classList.add('narrowLayout'); }
+  else { document.body.classList.remove('narrowLayout'); }
+}
+
+function setMenuOpen(open) {
+  menuOpen = open;
+  if (open) { document.body.classList.remove('menuClosed'); }
+  else { document.body.classList.add('menuClosed'); }
+}
+
+function addLumaSeg(label, m, parentEl) {
+  let b = createButton(label); b.parent(parentEl);
+  b.mousePressed(function () { setLumaMode(m); });
+  lumaSegBtns[m] = b;
+}
+function setLumaSegActive() {
+  for (let k in lumaSegBtns) {
+    if (k === lumaMode) { lumaSegBtns[k].addClass('active'); }
+    else { lumaSegBtns[k].removeClass('active'); }
+  }
+}
+function setLumaMode(m) {
+  if (m === lumaMode) { return; }
+  if (lumaSnapshot) { restoreLuma(); }        // 常に元の色を基準に適用し直す
+  if (m === 'min' || m === 'avg' || m === 'maxc') { equalizeLuma(m); }
+  lumaMode = m;
+  setLumaSegActive();
+}
+
+function buildUI() {
+  topBar = createDiv('').class('bar'); topBar.id('topBar');
+  topBar.style('top', '14px'); topBar.style('left', '50%'); topBar.style('transform', 'translateX(-50%)');
+  addModeBtn('ステップ切替', 'step');
+  addModeBtn('HSB色相回転', 'hsb');
+  addModeBtn('RGB中間混色（光量平均）', 'rgbLight');
+  addModeBtn('RGB中間混色（画素値平均）', 'rgbValue');
+  addModeBtn('OKLab 色相回転', 'oklch');
+  addModeBtn('OKLab 中間混色', 'oklabLin');
+  addModeBtn('CIELab 色相回転', 'cielch');
+  addModeBtn('CIELab 中間混色', 'cielabLin');
+  updateModeBtns();
+
+  // 時間制御（サークルの上）
+  timeBar = createDiv('').class('bar'); timeBar.id('timeBar');
+  durNum = createInput(String(loopDur), 'number'); durNum.parent(timeBar);
+  durNum.attribute('min', '0.5'); durNum.attribute('max', '120'); durNum.attribute('step', '0.5');
+  durNum.input(function () { setDur(float(durNum.value())); });
+  createSpan('秒').parent(timeBar);
+  durSlider = createSlider(0.5, 120, loopDur, 0.5); durSlider.parent(timeBar);
+  durSlider.input(function () { setDur(durSlider.value()); });
+  pauseBtn = createButton('⏸'); pauseBtn.parent(timeBar);
+  pauseBtn.mousePressed(togglePause);
+
+  // 色の設定（サークルの下）
+  colorBar = createDiv('').class('bar'); colorBar.id('colorBar');
+
+  gainWrap = createSpan(''); gainWrap.parent(colorBar);
+  gainWrap.style('display', 'none'); gainWrap.style('align-items', 'center'); gainWrap.style('gap', '6px');
+  createSpan('HDR輝度').parent(gainWrap);
+  let gs = createSlider(1.0, 4.0, hdrGain, 0.1); gs.parent(gainWrap); gs.style('width', '110px');
+  gs.input(function () { hdrGain = gs.value(); });
+  let lumaWrap = createDiv('').parent(colorBar);
+  lumaWrap.style('display', 'flex'); lumaWrap.style('align-items', 'center'); lumaWrap.style('gap', '8px');
+  createSpan('知覚明度統一').parent(lumaWrap);
+  let segWrap = createDiv('').class('segGroup'); segWrap.parent(lumaWrap);
+  addLumaSeg('最低', 'min', segWrap);
+  addLumaSeg('平均', 'avg', segWrap);
+  setLumaSegActive();
+
+  // 戻る・彩度最大は「明度統一」とは別の独立した操作として分離
+  restoreBtn = createButton('戻る'); restoreBtn.parent(colorBar);
+  restoreBtn.mousePressed(function () {
+    restoreLuma();
+    lumaMode = 'none';
+    setLumaSegActive();
+  });
+  restoreBtn.style('display', 'none');
+  let maxcBtn = createButton('彩度最大'); maxcBtn.parent(colorBar);
+  maxcBtn.mousePressed(function () { equalizeLuma('maxc'); });
+
+  // 観察トグル（時間バーの下・横並び）
+  viewBar = createDiv('').class('bar'); viewBar.id('viewBar');
+  xyBtn = createButton('xy色度図'); xyBtn.parent(viewBar);
+  xyBtn.mousePressed(function () {
+    showXY = !showXY;
+    if (showXY) { xyBtn.addClass('active'); } else { xyBtn.removeClass('active'); }
+  });
+  checkBtn = createButton('輝度検証'); checkBtn.parent(viewBar);
+  checkBtn.mousePressed(function () {
+    showLumaCheck = !showLumaCheck;
+    if (showLumaCheck) { checkBtn.addClass('active'); } else { checkBtn.removeClass('active'); }
+  });
+
+  // ---- ハンバーガー（狭い画面用） ----
+  hamBtn = document.createElement('button');
+  hamBtn.id = 'hamBtn';
+  hamBtn.innerHTML = '<span></span><span></span><span></span>';
+  hamBtn.title = 'メニュー';
+  document.body.appendChild(hamBtn);
+  hamBtn.addEventListener('click', function () { setMenuOpen(!menuOpen); });
+  document.addEventListener('click', function (ev) {
+    if (isNarrow && menuOpen && ev.target && ev.target.tagName === 'BUTTON' &&
+        ev.target.id !== 'hamBtn' && ev.target.closest('#menuStack')) {
+      setMenuOpen(false);
+    }
+  });
+  applyResponsive();
+
+  // ---- フルスクリーン（独立の固定ボタン。他要素の幅変化の影響を受けない） ----
+  fsBtn = document.createElement('button');
+  fsBtn.id = 'fsBtn';
+  fsBtn.innerHTML = '<span style="font-size:18px">⛶</span> フルスクリーン';
+  fsBtn.title = 'フルスクリーン';
+  document.body.appendChild(fsBtn);
+  fsBtn.addEventListener('click', function () { enterPlay(); });
+
+  // ---- インフォメーション（丸i） ----
+  infoBtn = document.createElement('button');
+  infoBtn.id = 'infoBtn';
+  infoBtn.textContent = 'i';
+  infoBtn.title = '使い方';
+  document.body.appendChild(infoBtn);
+
+  infoPanel = document.createElement('div');
+  infoPanel.id = 'infoPanel';
+  infoPanel.innerHTML =
+    '<div class="inner">' +
+    '<h2>光のグラデーション・タイムライン</h2>' +
+    '<p class="sub">色の点をサークル（時間の輪）に置き、色と色のあいだを光がどう渡るかを観察する装置です。</p>' +
+    '<h3>基本操作</h3>' +
+    '<ul>' +
+    '<li><b>色点をドラッグ</b> — タイミング（円周上の位置）を変える</li>' +
+    '<li><b>色点を円の外へドラッグ</b> — 削除（最低2点は残ります）</li>' +
+    '<li><b>色点を2回タップ／ダブルクリック</b> — カラーピッカーで色を変更</li>' +
+    '<li><b>リングの帯をタップ</b> — その位置に色点を追加</li>' +
+    '<li><b>白い針（再生ヘッド）をドラッグ</b> — 再生位置を動かす</li>' +
+    '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ</li>' +
+    '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
+    '</ul>' +
+    '<h3>パネル</h3>' +
+    '<ul>' +
+    '<li><b>輝度検証</b> — 中央に基準グレーを表示。グレーの明度は、選択中の方式が主張する「明度」の平均です</li>' +
+    '<li><b>xy色度図</b> — 色点と現在色をCIE xy平面に写します。<b>xy図のみ表示のとき、図上の点をドラッグして色を直接編集</b>できます（明るさYは保たれます）</li>' +
+    '<li><b>知覚明度(OKLab)で統一</b> — 全色点のOKLab明度を最低／平均に揃えます（「元に戻す」で復元）</li>' +
+    '<li><b>HDR輝度</b>（HDR対応環境のみ）— SDRの白(1.0)を超える光の持ち上げ量</li>' +
+    '</ul>' +
+    '<h3>色の変換についての注意</h3>' +
+    '<ul>' +
+    '<li>補間方式とは<b>「2色のあいだにどんな道を引くか」の選択</b>です。同じ色点でも、方式が違えば全く別の光になります</li>' +
+    '<li>HSBの「明度(B)」は知覚的な明るさではありません。<b>B一定でも画面は明滅します</b>（色相環は等明度ではない）</li>' +
+    '<li><b>RGB中間混色（画素値平均）</b>は符号値の平均であり、光の量の平均ではありません（中間が暗く濁ります）。<b>（光量平均）</b>はガンマを解き、物理的な光の量で平均します</li>' +
+    '<li>補色どうしの中間混色は<b>無彩色（グレー）</b>に近づきます。xy色度図では、白色点の近くを通る直線として見えます</li>' +
+    '<li>白・黒・グレーに<b>色相はありません</b>。無彩色を経由する補間では、相手側の色相を引き継ぎます</li>' +
+    '<li><b>CIELab</b>は青の領域で色相が曲がる既知の癖があります。<b>OKLab</b>（2020）はその修正版です</li>' +
+    '<li>「知覚明度(OKLab)で統一」はOKLabの物差しで揃えます。基準グレーは方式ごとの物差しなので、方式によっては一致しません——<b>「明度」の定義が違えば「揃った」の意味も違う</b>ということです</li>' +
+    '<li>xy色度図は<b>明るさを捨てた座標</b>です。黒は色度が定義できないため、便宜上D65白色点の位置に表示しています</li>' +
+    '</ul>' +
+    '<p class="closeHint">画面のどこかをクリックすると閉じます（Escでも可）</p>' +
+    '</div>';
+  document.body.appendChild(infoPanel);
+
+  infoBtn.addEventListener('click', function () { infoPanel.style.display = 'block'; });
+  infoPanel.addEventListener('click', function () { infoPanel.style.display = 'none'; });
+}
+
+function addModeBtn(label, m) {
+  let b = createButton(label); b.parent(topBar);
+  b.mousePressed(function () { mode = m; updateModeBtns(); });
+  modeBtns[m] = b;
+}
+function updateModeBtns() {
+  for (let k in modeBtns) {
+    if (k === mode) { modeBtns[k].addClass('active'); }
+    else { modeBtns[k].removeClass('active'); }
+  }
+}
+</script>
+</body>
+</html>

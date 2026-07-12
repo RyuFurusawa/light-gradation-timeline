@@ -35,10 +35,10 @@
   }
   .bar input[type=range] { width: 130px; accent-color: #f5f5f5; }
   #topBar { top: 14px; left: 50%; transform: translateX(-50%); }
-  #timeBar { top: 70px; left: 50%; transform: translateX(-50%); }
-  #colorBar { bottom: 16px; left: 50%; transform: translateX(-50%); }
+  #timeBar { left: 50%; transform: translateX(-50%); }
+  #colorBar { left: 50%; transform: translateX(-50%); }
   body:not(.narrowLayout) #colorBar { flex-wrap: nowrap; max-width: 96vw; }
-  #viewBar { top: 126px; left: 50%; transform: translateX(-50%); }
+  #viewBar { left: 50%; transform: translateX(-50%); }
   .segGroup { display: flex; border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; overflow: hidden; }
   .segGroup button { border: none !important; border-radius: 0 !important; }
   .segGroup button + button { border-left: 1px solid rgba(255,255,255,0.18) !important; }
@@ -74,12 +74,19 @@
   body.menuClosed #menuStack { display: none; }
   #hamBtn { display: block; }
   /* 狭い画面：時間制御は上、色設定は最下部、左右トグルは端に */
-  body.narrowLayout #timeBar { top: 66px; left: 8px; right: 8px; transform: none !important; }
+  body.narrowLayout #timeBar { padding: 5px 8px; }
+  body.narrowLayout #timeBar input[type=range] { width: 96px; }
+  body.narrowLayout #timeBar input[type=number] { width: 52px; }
+  body.narrowLayout #timeBar button { font-size: 13px; padding: 6px 10px; }
   body.narrowLayout #colorBar {
     left: 8px !important; right: 8px; transform: none !important;
-    bottom: 10px; max-height: 40vh; overflow-y: auto;
+    justify-content: center; max-height: 40vh; overflow-y: auto;
   }
-  body.narrowLayout #viewBar { top: 118px; left: 8px; right: 8px; transform: none !important; }
+  body.narrowLayout #colorBar button { font-size: 12px; padding: 6px 10px; }
+  body.narrowLayout #colorBar span { font-size: 12px; }
+  body.narrowLayout #colorBar input[type=range] { width: 90px; }
+  body.narrowLayout #viewBar { padding: 4px 6px; gap: 6px; }
+  body.narrowLayout #viewBar button { font-size: 11px; padding: 6px 10px; }
   #fsBtn {
     position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%); z-index: 12;
     display: flex; align-items: center; gap: 8px;
@@ -91,7 +98,7 @@
     cursor: pointer; box-shadow: 0 6px 24px rgba(0,0,0,0.35);
   }
   #fsBtn:hover { background: rgba(255,255,255,0.2); }
-  body.narrowLayout #fsBtn { bottom: 132px; top: auto; padding: 10px 16px; font-size: 14px; }
+  body.narrowLayout #fsBtn { padding: 9px 15px; font-size: 13px; }
   #infoBtn {
     position: fixed; top: 14px; right: 14px; z-index: 12;
     width: 40px; height: 40px; border-radius: 50%;
@@ -232,7 +239,56 @@ function showErr(err) {
   b.textContent = 'エラー: ' + (err && err.message ? err.message : String(err)) + '\n' + (err && err.stack ? err.stack.split('\n')[1] : '');
 }
 
-function layout() { cx = width / 2; cy = height / 2; R = min(width, height) * 0.30; }
+function layout() { cx = width / 2; cy = height / 2; R = min(width, height) * 0.30; placeBars(); }
+
+// UIをサークルの外周と画面縁の中間に、上下対称・左右中央で均等配置する
+function placeBars() {
+  if (playMode) { return; }
+  if (typeof timeBar === 'undefined' || !timeBar) { return; }
+  let narrow = document.body.classList.contains('narrowLayout');
+
+  let topGap = cy - R;
+  let botGap = height - (cy + R);
+
+  // 時間制御：狭い画面ではハンバーガー／iボタンの下、広い画面では上の空きの中央
+  let tEl = timeBar.elt;
+  let tH = tEl.offsetHeight || 46;
+  if (narrow) {
+    tEl.style.top = '70px';
+  } else {
+    tEl.style.top = Math.max(12, Math.round(topGap / 2 - tH / 2)) + 'px';
+  }
+  tEl.style.bottom = 'auto';
+
+  // 観察トグル：常にサークル内側・下寄り（狭い画面ではやや上＝弦の幅を確保）
+  let vEl = viewBar.elt;
+  let vH = vEl.offsetHeight || 40;
+  let vy = narrow ? cy + R * 0.74 : cy + R * 0.84;
+  vEl.style.top = Math.round(vy - vH / 2) + 'px';
+  vEl.style.bottom = 'auto';
+
+  // 色設定とフルスクリーン
+  let cEl = colorBar.elt;
+  let cH = cEl.offsetHeight || 50;
+  if (narrow) {
+    cEl.style.top = 'auto';
+    cEl.style.bottom = '10px';
+    if (fsBtn) {
+      let fH = fsBtn.offsetHeight || 40;
+      let mid = (cy + R + (height - cH - 10)) / 2;   // サークル下端と色設定の中間
+      fsBtn.style.top = Math.round(mid - fH / 2) + 'px';
+      fsBtn.style.bottom = 'auto';
+    }
+  } else {
+    if (fsBtn) {
+      let fH = fsBtn.offsetHeight || 42;
+      fsBtn.style.top = Math.round(cy + R + botGap / 3 - fH / 2) + 'px';
+      fsBtn.style.bottom = 'auto';
+    }
+    cEl.style.top = Math.round(cy + R + (botGap * 2) / 3 - cH / 2) + 'px';
+    cEl.style.bottom = 'auto';
+  }
+}
 
 function windowResized() { resizeCanvas(windowWidth, windowHeight); layout(); resizeGpu(); applyResponsive(); }
 
@@ -727,12 +783,18 @@ function enterPlay() {
 }
 function exitPlay() {
   if (!playMode) { return; }
-  playMode = false; topBar.show(); timeBar.show(); colorBar.show(); viewBar.show();
+  playMode = false;
+  // show()が付与するインラインdisplayはCSSと競合するため、クラス制御に戻す
+  [topBar, timeBar, colorBar, viewBar].forEach(function (b) {
+    if (b) { b.show(); b.elt.style.display = ''; }
+  });
   if (infoBtn) { infoBtn.style.display = 'block'; }
   if (fsBtn) { fsBtn.style.display = 'flex'; }
-  if (hamBtn) { hamBtn.style.display = ''; }   // インライン解除→CSS(body.narrow)に制御を戻す
-  applyResponsive();
+  if (hamBtn) { hamBtn.style.display = ''; }
   try { fullscreen(false); } catch (err) {}
+  // フルスクリーン解除→リサイズ完了を待ってからレイアウトを再計算（崩れ防止）
+  setTimeout(function () { layout(); resizeGpu(); applyResponsive(); placeBars(); }, 60);
+  setTimeout(function () { layout(); resizeGpu(); applyResponsive(); placeBars(); }, 250);
 }
 function togglePause() {
   if (!paused) { pausedAt = millis(); paused = true; }
@@ -1096,6 +1158,7 @@ function applyResponsive() {
   // その他バーの配置だけを幅で切り替える（narrowLayoutクラス）
   if (isNarrow) { document.body.classList.add('narrowLayout'); }
   else { document.body.classList.remove('narrowLayout'); }
+  placeBars();
 }
 
 function setMenuOpen(open) {

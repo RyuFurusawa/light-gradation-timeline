@@ -34,7 +34,7 @@
     color: #fff; font-size: 13px; text-align: right;
   }
   .bar input[type=range] { width: 130px; accent-color: #f5f5f5; }
-  #topBar { top: 14px; left: 50%; transform: translateX(-50%); }
+  #topBar { display: none; }   /* 方式選択はモーダルへ移行 */
   #timeBar { left: 50%; transform: translateX(-50%); }
   #colorBar { left: 50%; transform: translateX(-50%); }
   body:not(.narrowLayout) #colorBar { flex-wrap: nowrap; max-width: 96vw; }
@@ -50,43 +50,50 @@
     .bar input[type=number] { width: 72px; padding: 10px; font-size: 15px; }
     .bar input[type=range] { width: 30vw; min-width: 100px; }
   }
-  #hamBtn {
-    position: fixed; top: 14px; left: 14px; z-index: 14;
-    width: 44px; height: 44px; border-radius: 12px;
+  /* 補間方式スイッチ（サークル上部）とモーダル */
+  #modeSwitch {
+    position: fixed; left: 50%; transform: translateX(-50%); z-index: 13;
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 16px; border-radius: 22px;
     background: rgba(15,15,18,0.6); backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.22);
-    cursor: pointer; padding: 0;
+    border: 1px solid rgba(255,255,255,0.26); color: #f2f2f2;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    font-size: 14px; line-height: 1; cursor: pointer; white-space: nowrap;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.3);
   }
-  #hamBtn span { display: block; height: 2px; margin: 5px 9px; border-radius: 2px; background: #f2f2f2; }
-  #menuStack {
-    position: fixed; top: 66px; left: 14px; z-index: 11;
-    max-height: 76vh; overflow-y: auto;
+  #modeSwitch:hover { background: rgba(255,255,255,0.18); }
+  #modeSwitch .caret { font-size: 10px; opacity: 0.75; }
+  body.narrowLayout #modeSwitch { font-size: 12px; padding: 8px 13px; max-width: 82vw; overflow: hidden; }
+
+  #modeModal {
+    position: fixed; inset: 0; z-index: 40; display: none;
+    background: rgba(0,0,0,0.62);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    align-items: center; justify-content: center;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+  }
+  #modeModal.open { display: flex; }
+  #modeModal .sheet {
     display: flex; flex-direction: column; gap: 8px;
+    padding: 22px; border-radius: 20px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow: 0 16px 60px rgba(0,0,0,0.5);
+    max-height: 86vh; overflow-y: auto; min-width: 280px;
   }
-  #menuStack .bar {
-    position: static !important; transform: none !important;
-    left: auto; right: auto; top: auto; bottom: auto;
-    flex-direction: column !important; align-items: stretch; flex-wrap: nowrap !important;
-    max-width: none; width: 220px;
+  #modeModal h3 {
+    margin: 0 0 6px; font-size: 12px; letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.55); font-weight: 600; text-align: center;
   }
-  #menuStack .bar button { padding: 13px 16px; font-size: 15px; }
-  body.menuClosed #menuStack { display: none; }
-  #hamBtn { display: block; }
-  /* 狭い画面：時間制御は上、色設定は最下部、左右トグルは端に */
-  body.narrowLayout #timeBar { padding: 5px 8px; }
-  body.narrowLayout #timeBar input[type=range] { width: 96px; }
-  body.narrowLayout #timeBar input[type=number] { width: 52px; }
-  body.narrowLayout #timeBar button { font-size: 13px; padding: 6px 10px; }
-  body.narrowLayout #colorBar {
-    left: 8px !important; right: 8px; transform: none !important;
-    justify-content: center; max-height: 40vh; overflow-y: auto;
+  #modeModal button {
+    padding: 14px 20px; border-radius: 12px; text-align: left;
+    border: 1px solid rgba(255,255,255,0.16);
+    background: rgba(255,255,255,0.07); color: #f2f2f2;
+    font-size: 15px; line-height: 1.2; cursor: pointer; white-space: nowrap;
   }
-  body.narrowLayout #colorBar button { font-size: 12px; padding: 6px 10px; }
-  body.narrowLayout #colorBar span { font-size: 12px; }
-  body.narrowLayout #colorBar input[type=range] { width: 90px; }
-  body.narrowLayout #viewBar { padding: 4px 6px; gap: 6px; }
-  body.narrowLayout #viewBar button { font-size: 11px; padding: 6px 10px; }
+  #modeModal button:hover { background: rgba(255,255,255,0.2); }
+  #modeModal button.active { background: #f5f5f5; color: #111; border-color: #f5f5f5; }
   #fsBtn {
     position: fixed; left: 50%; bottom: 128px; transform: translateX(-50%); z-index: 12;
     display: flex; align-items: center; gap: 8px;
@@ -162,7 +169,7 @@ window.addEventListener('error', function (ev) {
 });
 
 let points = [];
-let mode = 'hsb';            // step | hsb | rgbLight | rgbValue | oklch
+let mode = 'oklabLin';       // step | hsb | rgbLight | rgbValue | oklch | oklabLin | cielch | cielabLin
 let loopDur = 12;
 let hdrGain = 1.6;          // HDR時の輝度倍率（SDR白=1.0を超える持ち上げ）
 let t0 = 0, paused = false, pausedAt = 0;
@@ -181,10 +188,23 @@ let showLumaCheck = false;   // 輝度検証：中央にグレー基準面を表
 let showXY = false;          // xy色度図の表示
 let xyBuf = null, xyBufKey = '';
 let infoBtn = null, infoPanel = null;
-let hamBtn = null, menuOpen = false, isNarrow = false;
+let isNarrow = false;
+let modeSwitch = null, modeModal = null;
+let modalModeBtns = {};
+const MODE_LIST = [
+  ['ステップ切替', 'step'],
+  ['HSB色相回転', 'hsb'],
+  ['RGB中間混色（光量平均）', 'rgbLight'],
+  ['RGB中間混色（画素値平均）', 'rgbValue'],
+  ['OKLab 色相回転', 'oklch'],
+  ['OKLab 中間混色', 'oklabLin'],
+  ['CIELab 色相回転', 'cielch'],
+  ['CIELab 中間混色', 'cielabLin']
+];
 let fsBtn = null;
 let topBar, timeBar, colorBar, viewBar, pauseBtn, durNum, durSlider, gainNum, gainWrap, restoreBtn = null, checkBtn, xyBtn, modeBtns = {};
 let lumaSegBtns = {}, lumaMode = 'none';
+let modeLabels = {};
 
 /* ---------------- p5 ---------------- */
 function setup() {
@@ -244,7 +264,8 @@ function layout() { cx = width / 2; cy = height / 2; R = min(width, height) * 0.
 // UIをサークルの外周と画面縁の中間に、上下対称・左右中央で均等配置する
 function placeBars() {
   if (playMode) { return; }
-  if (typeof timeBar === 'undefined' || !timeBar) { return; }
+  // すべてのバーが生成済みでなければ何もしない（setup途中の呼び出しで落ちるのを防ぐ）
+  if (!timeBar || !viewBar || !colorBar) { return; }
   let narrow = document.body.classList.contains('narrowLayout');
 
   let topGap = cy - R;
@@ -259,6 +280,15 @@ function placeBars() {
     tEl.style.top = Math.max(12, Math.round(topGap / 2 - tH / 2)) + 'px';
   }
   tEl.style.bottom = 'auto';
+
+  // 補間方式スイッチ：時間バーの下端とサークル上端のちょうど中間
+  if (modeSwitch) {
+    let sH = modeSwitch.offsetHeight || 38;
+    let tBottom = (parseFloat(tEl.style.top) || 0) + tH;   // 時間バーの下端
+    let mid = (tBottom + (cy - R)) / 2;                    // サークル上端との中間
+    modeSwitch.style.top = Math.round(mid - sH / 2) + 'px';
+    modeSwitch.style.bottom = 'auto';
+  }
 
   // 観察トグル：常にサークル内側・下寄り（狭い画面ではやや上＝弦の幅を確保）
   let vEl = viewBar.elt;
@@ -777,7 +807,8 @@ function enterPlay() {
   topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
   if (infoBtn) { infoBtn.style.display = 'none'; }
   if (infoPanel) { infoPanel.style.display = 'none'; }
-  if (hamBtn) { hamBtn.style.display = 'none'; }
+  if (modeSwitch) { modeSwitch.style.display = 'none'; }
+  if (modeModal) { modeModal.classList.remove('open'); }
   if (fsBtn) { fsBtn.style.display = 'none'; }
   try { fullscreen(true); } catch (err) {}
 }
@@ -790,7 +821,7 @@ function exitPlay() {
   });
   if (infoBtn) { infoBtn.style.display = 'block'; }
   if (fsBtn) { fsBtn.style.display = 'flex'; }
-  if (hamBtn) { hamBtn.style.display = ''; }
+  if (modeSwitch) { modeSwitch.style.display = ''; }
   try { fullscreen(false); } catch (err) {}
   // フルスクリーン解除→リサイズ完了を待ってからレイアウトを再計算（崩れ防止）
   setTimeout(function () { layout(); resizeGpu(); applyResponsive(); placeBars(); }, 60);
@@ -1146,25 +1177,9 @@ function drawXYDiagram(sorted, cur) {
 function applyResponsive() {
   if (playMode) { return; }
   isNarrow = windowWidth <= 820;
-  // 補間方式は画面サイズを問わず常にハンバーガーへ収める
-  let stack = document.getElementById('menuStack');
-  if (!stack) {
-    stack = document.createElement('div');
-    stack.id = 'menuStack';
-    document.body.appendChild(stack);
-  }
-  if (topBar && topBar.elt.parentNode !== stack) { stack.appendChild(topBar.elt); }
-  setMenuOpen(menuOpen);
-  // その他バーの配置だけを幅で切り替える（narrowLayoutクラス）
   if (isNarrow) { document.body.classList.add('narrowLayout'); }
   else { document.body.classList.remove('narrowLayout'); }
   placeBars();
-}
-
-function setMenuOpen(open) {
-  menuOpen = open;
-  if (open) { document.body.classList.remove('menuClosed'); }
-  else { document.body.classList.add('menuClosed'); }
 }
 
 function addLumaSeg(label, m, parentEl) {
@@ -1189,15 +1204,6 @@ function setLumaMode(m) {
 function buildUI() {
   topBar = createDiv('').class('bar'); topBar.id('topBar');
   topBar.style('top', '14px'); topBar.style('left', '50%'); topBar.style('transform', 'translateX(-50%)');
-  addModeBtn('ステップ切替', 'step');
-  addModeBtn('HSB色相回転', 'hsb');
-  addModeBtn('RGB中間混色（光量平均）', 'rgbLight');
-  addModeBtn('RGB中間混色（画素値平均）', 'rgbValue');
-  addModeBtn('OKLab 色相回転', 'oklch');
-  addModeBtn('OKLab 中間混色', 'oklabLin');
-  addModeBtn('CIELab 色相回転', 'cielch');
-  addModeBtn('CIELab 中間混色', 'cielabLin');
-  updateModeBtns();
 
   // 時間制御（サークルの上）
   timeBar = createDiv('').class('bar'); timeBar.id('timeBar');
@@ -1250,25 +1256,46 @@ function buildUI() {
     if (showLumaCheck) { checkBtn.addClass('active'); } else { checkBtn.removeClass('active'); }
   });
 
-  // ---- ハンバーガー（狭い画面用） ----
-  hamBtn = document.createElement('button');
-  hamBtn.id = 'hamBtn';
-  hamBtn.innerHTML = '<span></span><span></span><span></span>';
-  hamBtn.title = 'メニュー';
-  document.body.appendChild(hamBtn);
-  hamBtn.addEventListener('click', function () { setMenuOpen(!menuOpen); });
-  document.addEventListener('click', function (ev) {
-    if (isNarrow && menuOpen && ev.target && ev.target.tagName === 'BUTTON' &&
-        ev.target.id !== 'hamBtn' && ev.target.closest('#menuStack')) {
-      setMenuOpen(false);
-    }
-  });
-  applyResponsive();
+  // ---- 補間方式スイッチ（サークル上部）＋ 選択モーダル ----
+  modeSwitch = document.createElement('button');
+  modeSwitch.id = 'modeSwitch';
+  modeSwitch.innerHTML = '<span id="modeSwitchLabel"></span><span class="caret">\u25bc</span>';
+  document.body.appendChild(modeSwitch);
+  modeSwitch.addEventListener('click', function () { modeModal.classList.add('open'); });
 
-  // ---- フルスクリーン（独立の固定ボタン。他要素の幅変化の影響を受けない） ----
+  modeModal = document.createElement('div');
+  modeModal.id = 'modeModal';
+  let sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  let h = document.createElement('h3');
+  h.textContent = '補間方式';
+  sheet.appendChild(h);
+  modeModal.appendChild(sheet);
+  document.body.appendChild(modeModal);
+  // 背景クリックで閉じる（シート内クリックは閉じない）
+  modeModal.addEventListener('click', function (ev) {
+    if (ev.target === modeModal) { modeModal.classList.remove('open'); }
+  });
+
+  // topBar のボタンをモーダルへ複製（topBar自体はCSSで非表示）
+  MODE_LIST.forEach(function (item) {
+    let b = document.createElement('button');
+    b.textContent = item[0];
+    b.dataset.mode = item[1];
+    b.addEventListener('click', function () {
+      mode = item[1];
+      updateModeBtns();
+      modeModal.classList.remove('open');
+    });
+    sheet.appendChild(b);
+    modalModeBtns[item[1]] = b;
+  });
+  updateModeBtns();
+
+  // ---- フルスクリーン（独立の固定ボタン） ----
   fsBtn = document.createElement('button');
   fsBtn.id = 'fsBtn';
-  fsBtn.innerHTML = '<span style="font-size:18px">⛶</span> フルスクリーン';
+  fsBtn.innerHTML = '<span style="font-size:18px">\u26f6</span> フルスクリーン';
   fsBtn.title = 'フルスクリーン';
   document.body.appendChild(fsBtn);
   fsBtn.addEventListener('click', function () { enterPlay(); });
@@ -1320,17 +1347,25 @@ function buildUI() {
 
   infoBtn.addEventListener('click', function () { infoPanel.style.display = 'block'; });
   infoPanel.addEventListener('click', function () { infoPanel.style.display = 'none'; });
-}
 
-function addModeBtn(label, m) {
-  let b = createButton(label); b.parent(topBar);
-  b.mousePressed(function () { mode = m; updateModeBtns(); });
-  modeBtns[m] = b;
+  // すべてのUIが揃ってから配置を確定する（生成前に呼ぶと位置が決まらない）
+  applyResponsive();
+  placeBars();
 }
 function updateModeBtns() {
-  for (let k in modeBtns) {
-    if (k === mode) { modeBtns[k].addClass('active'); }
-    else { modeBtns[k].removeClass('active'); }
+  // モーダル内のボタンの選択状態
+  for (let k in modalModeBtns) {
+    if (k === mode) { modalModeBtns[k].classList.add('active'); }
+    else { modalModeBtns[k].classList.remove('active'); }
+  }
+  // サークル上のスイッチに現在の方式名を表示
+  let lab = document.getElementById('modeSwitchLabel');
+  if (lab) {
+    let name = '';
+    for (let i = 0; i < MODE_LIST.length; i++) {
+      if (MODE_LIST[i][1] === mode) { name = MODE_LIST[i][0]; }
+    }
+    lab.textContent = name;
   }
 }
 </script>

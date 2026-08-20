@@ -58,7 +58,6 @@
 - 無彩色に色相はないこと（powerless hue）
 - Helmholtz–Kohlrausch効果と色知覚の個人差
 
-詳しい実験課題例は [`docs/lesson-plan.md`](docs/lesson-plan.md) を参照してください（WorkFlowy互換のMarkdown形式）。
 
 ## 技術メモ
 

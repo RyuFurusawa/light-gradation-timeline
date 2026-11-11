@@ -175,6 +175,79 @@
   }
   #wakeNotice .card b { color: #fff; }
   #wakeNotice .card .closeHint { display: block; margin-top: 10px; font-size: 12px; color: rgba(255,233,200,0.6); text-align: center; }
+  /* ---- 画面分割（親ページ）：タイムラインを iframe で横に並べる ---- */
+  #panes { position: fixed; inset: 0; display: flex; background: #000; }
+  #panes .pane { position: relative; flex: 1 1 0; min-width: 0; height: 100%; }
+  #panes iframe { display: block; width: 100%; height: 100%; border: 0; background: #000; }
+  .splitBtn, .paneClose {
+    position: fixed; z-index: 25; border-radius: 50%; padding: 0;
+    background: rgba(15,15,18,0.55); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.28); color: #fff;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; line-height: 1;
+    cursor: pointer; box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  }
+  .splitBtn:hover, .paneClose:hover { background: rgba(255,255,255,0.22); }
+  /* ＋は画面の縁に貼りつくタブ形（細いペインでもリングに重ならないよう幅を抑える） */
+  .splitBtn { top: 50%; transform: translateY(-50%); width: 28px; height: 64px; font-size: 22px; font-weight: 300; }
+  #splitLeft { left: 0; border-radius: 0 14px 14px 0; border-left: 0; }
+  #splitRight { right: 0; border-radius: 14px 0 0 14px; border-right: 0; }
+  .paneClose { position: absolute; top: 62px; left: 12px; width: 32px; height: 32px; font-size: 17px; display: none; }
+  /* 分割中の共通バー（親）：補間方式・フルスクリーン・境界グラデーション・ヘルプを全タイムライン共通で1つずつ */
+  #hostBar {
+    position: fixed; top: 10px; left: 0; right: 0; margin: 0 auto; width: max-content; z-index: 25;
+    display: none; align-items: center; justify-content: center; gap: 8px;
+    flex-wrap: wrap; max-width: 96vw; white-space: nowrap;
+  }
+  body.multi #hostBar { display: flex; }
+  body.playing #hostBar { display: none; }
+  body.host #modeSwitch, body.host #fsBtn, body.host #infoBtn { position: static; transform: none; }
+  body.host #fsBtn { padding: 9px 16px; font-size: 14px; }
+  #blendBtn {
+    padding: 9px 16px; border-radius: 22px;
+    background: rgba(15,15,18,0.6); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.26); color: #f2f2f2;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    font-size: 14px; line-height: 1; cursor: pointer; box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  }
+  #blendBtn:hover { background: rgba(255,255,255,0.18); }
+  #blendBtn.active { background: #f5f5f5; color: #111; border-color: #f5f5f5; }
+  #blendW { width: 80px; accent-color: #f5f5f5; display: none; }
+  #blendBtn.active + #blendW { display: block; }
+  /* ---- 子ページ側：分割中（shared）は共通バーに任せるボタンを隠す ---- */
+  body.shared #modeSwitch, body.shared #fsBtn, body.shared #infoBtn { display: none !important; }
+  /* ---- 子ページ側：細い枠の簡略表示（compact）。リング＋秒数＋一時停止だけを出し、残りは「⋯」で開く ---- */
+  #moreBtn {
+    position: fixed; left: 50%; transform: translateX(-50%); z-index: 12; display: none;
+    width: 38px; height: 38px; border-radius: 50%; padding: 0;
+    background: rgba(15,15,18,0.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.28); color: #fff;
+    font: 20px/1 system-ui, -apple-system, sans-serif; cursor: pointer;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  }
+  #moreBtn:hover { background: rgba(255,255,255,0.22); }
+  body.compact #moreBtn { display: block; }
+  body.compact.moreOpen #moreBtn { background: #f5f5f5; color: #111; border-color: #f5f5f5; }
+  body.play #moreBtn { display: none; }
+  body.compact:not(.moreOpen) #viewBar, body.compact:not(.moreOpen) #colorBar { display: none; }
+  body.compact #timeBar, body.compact #viewBar { flex-wrap: nowrap; }
+  body.compact #timeBar input[type=range] { display: none; }
+  body.compact .bar button, body.compact .bar span { white-space: nowrap; }
+  body.compact #colorBar { max-width: calc(100vw - 16px); justify-content: center; box-sizing: border-box; }
+  body.multi .paneClose { display: block; }
+  body.playing .splitBtn, body.playing .paneClose { display: none; }
+  /* 枠の境界のつまみ：左右にドラッグして幅の配分を変える（ダブルクリックで均等に戻す） */
+  .paneDivider {
+    position: fixed; top: 0; bottom: 0; width: 18px; margin-left: -9px; z-index: 24;
+    cursor: col-resize; touch-action: none;
+  }
+  .paneDivider::after {
+    content: ''; position: absolute; left: 7px; top: 50%; width: 4px; height: 52px;
+    transform: translateY(-50%); border-radius: 2px;
+    background: rgba(255,255,255,0.6); box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+  }
+  .paneDivider:hover::after, .paneDivider.drag::after { background: #fff; height: 72px; }
+  body.playing .paneDivider { display: none; }
   #errbox {
     position: absolute; left: 12px; top: 12px; z-index: 99; display: none;
     max-width: 60vw; padding: 10px 12px; border-radius: 10px;
@@ -201,6 +274,18 @@ window.addEventListener('error', function (ev) {
   b.style.display = 'block';
   b.textContent = 'JSエラー: ' + ev.message + '\n' + (ev.filename || '') + ' : ' + ev.lineno;
 });
+
+// 役割：親（HOST）＝画面分割の管理だけを行う／子（PANE）＝iframe内でタイムライン1つを動かす
+// 通常の起動は親で、親が最初の子を1つ作る。file:// でも動くよう、親子のやり取りは postMessage のみ
+const IS_PANE = new URLSearchParams(location.search).has('pane') && window.parent !== window;
+const IS_HOST = !IS_PANE;
+let hostPanes = [], hostStateWaiters = {}, hostReqId = 0;
+let gainSlider = null;
+let reversed = false, revBtn = null;       // 回転（読み取り）方向の逆転。false＝時計回り
+let sharedUI = false, moreBtn = null;      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
+// 境界グラデーション。子：隣の現在色（線形×ゲイン）を受け取り、枠の端へ向けて混ぜる
+let blendOn = false, blendWidth = 1, nbLeft = null, nbRight = null, hasLeft = false, hasRight = false;
+let hostBar = null, blendBtn = null;
 
 let points = [];
 let mode = 'oklabLin';       // step | hsb | rgbLight | rgbValue | oklch | oklabLin | cielch | cielabLin
@@ -245,7 +330,14 @@ let modeLabels = {};
 
 /* ---------------- p5 ---------------- */
 function setup() {
-  let c = createCanvas(windowWidth, windowHeight);
+  if (IS_HOST) {
+    noCanvas(); noLoop();
+    buildHost();
+    initWakeLock();
+    registerServiceWorker();
+    return;
+  }
+  let c = createCanvas(window.innerWidth, window.innerHeight);
   c.class('p5Canvas');
   layout();
   textFont('system-ui, sans-serif');
@@ -271,8 +363,9 @@ function setup() {
 
   buildUI();
   initWakeLock();
-  registerServiceWorker();
   t0 = millis();
+  initPaneMessaging();
+  applyStateFromHash();
 
   // レンダラを検出・初期化（非同期）。決まるまではsRGBで暫定描画
   renderer = makeCssRenderer(false);
@@ -298,7 +391,13 @@ function showErr(err) {
   b.textContent = 'エラー: ' + (err && err.message ? err.message : String(err)) + '\n' + (err && err.stack ? err.stack.split('\n')[1] : '');
 }
 
-function layout() { cx = width / 2; cy = height / 2; R = min(width, height) * 0.30; placeBars(); }
+function isCompact() { return sharedUI && window.innerWidth <= 820; }
+function layout() {
+  cx = width / 2; cy = height / 2;
+  // 簡略表示（分割中の細い枠）はUIが少ないぶん、リングを枠の幅いっぱい近くまで大きくする
+  R = isCompact() ? min(width * 0.38, height * 0.30) : min(width, height) * 0.30;
+  placeBars();
+}
 
 // UIをサークルの外周と画面縁の中間に、上下対称・左右中央で均等配置する
 function placeBars() {
@@ -310,13 +409,27 @@ function placeBars() {
   let topGap = cy - R;
   let botGap = height - (cy + R);
 
+  // 簡略表示：上に秒数と一時停止、サークルの下に「⋯」。開いたときだけ観察トグルと色設定を出す
+  if (document.body.classList.contains('compact')) {
+    // 左上の×（親が置く、上端から62〜94px）の下に置く。細い枠でも×と重ならない
+    timeBar.elt.style.top = '102px'; timeBar.elt.style.bottom = 'auto';
+    let my = Math.round(cy + R + 36);
+    if (moreBtn) { moreBtn.style.top = my + 'px'; }
+    // 開いたパネルは下端から積む（色設定の上に観察トグル）
+    colorBar.elt.style.top = 'auto'; colorBar.elt.style.bottom = '10px';
+    let cH2 = colorBar.elt.offsetHeight || 0, vH2 = viewBar.elt.offsetHeight || 0;
+    viewBar.elt.style.top = Math.round(height - 10 - cH2 - 8 - vH2) + 'px'; viewBar.elt.style.bottom = 'auto';
+    return;
+  }
+
   // 時間制御：狭い画面ではハンバーガー／iボタンの下、広い画面では上の空きの中央
   let tEl = timeBar.elt;
   let tH = tEl.offsetHeight || 46;
   if (narrow) {
     tEl.style.top = '70px';
   } else {
-    tEl.style.top = Math.max(12, Math.round(topGap / 2 - tH / 2)) + 'px';
+    // 分割中は上端に親の共通バーがあるので、その下に置く
+    tEl.style.top = Math.max(sharedUI ? 64 : 12, Math.round(topGap / 2 - tH / 2)) + 'px';
   }
   tEl.style.bottom = 'auto';
 
@@ -359,31 +472,53 @@ function placeBars() {
   }
 }
 
-function windowResized() { resizeCanvas(windowWidth, windowHeight); layout(); resizeGpu(); applyResponsive(); }
+function windowResized() { if (IS_HOST) { return; } resizeCanvas(window.innerWidth, window.innerHeight); layout(); resizeGpu(); applyResponsive(); }
 
 function resizeGpu() {
   let g = document.getElementById('gpu');
   if (renderer && renderer.kind === 'HDR') {
     let dpr = window.devicePixelRatio || 1;
-    g.width = Math.floor(windowWidth * dpr);
-    g.height = Math.floor(windowHeight * dpr);
+    g.width = Math.floor(window.innerWidth * dpr);
+    g.height = Math.floor(window.innerHeight * dpr);
   }
 }
 
 function getPhase() {
   let now = paused ? pausedAt : millis();
   let p = ((now - t0) / 1000) / loopDur;
+  if (reversed) { p = -p; }
   return p - Math.floor(p);
+}
+// 位相（0..1、円周上の位置）を直接指定する。回転方向によらず同じ位置になる
+function setPhase(ph) {
+  let now = paused ? pausedAt : millis();
+  t0 = now - (reversed ? (1 - ph) : ph) * loopDur * 1000;
+}
+// 回転方向を逆にする（針の位置はそのまま、進む向きだけ変わる）
+function setReversed(v) {
+  let ph = getPhase();
+  reversed = !!v;
+  setPhase(ph);
+  if (revBtn) {
+    revBtn.html(reversed ? '\u21ba' : '\u21bb');
+    if (reversed) { revBtn.addClass('active'); } else { revBtn.removeClass('active'); }
+  }
 }
 
 /* ---------------- ループ ---------------- */
 function draw() {
+  if (IS_HOST) { return; }
   let fs = !!fullscreen();
-  if (fs !== wasFs) { resizeCanvas(windowWidth, windowHeight); layout(); resizeGpu(); wasFs = fs; }
+  if (fs !== wasFs) { resizeCanvas(window.innerWidth, window.innerHeight); layout(); resizeGpu(); wasFs = fs; }
+  // 分割で枠の幅が変わったとき、resize イベントが遅れて届くことがあるので、描画のたびに実寸と照合する
+  if (width !== window.innerWidth || height !== window.innerHeight) { windowResized(); }
 
   let sorted = sortPoints();
   let a = getPhase() * TWO_PI - HALF_PI;
   let cur = sampleAt(a, sorted);
+
+  // 境界グラデーション中は、自分の現在色（とHDRゲイン）を親経由で隣へ知らせる
+  if (blendOn) { toHost({ type: 'color', rgb: [cur[0], cur[1], cur[2]], gain: outGain() }); }
 
   // 現在色を選ばれたレンダラで画面全体に描く（HDR失敗時はP3/sRGBへ自動降格）
   try {
@@ -579,6 +714,34 @@ function hexToRgb(hx) {
 }
 function hex2(n) { let s = Math.round(constrain(n, 0, 255)).toString(16); return s.length < 2 ? '0' + s : s; }
 
+/* ---------------- 境界グラデーション ----------------
+   隣り合う枠の現在色どうしを、選択中の補間方式（全枠共通）で空間的につなぐ。
+   枠の中央＝自分の色（補間の f=0）、境界＝ちょうど中間（f=0.5）、その先は隣の枠が引き継ぐ。
+   両側の枠が同じ2色・同じ方式で計算するので、境界で色が一致する（隣の色は1フレーム遅れで届く）。
+   幅 blendWidth=1 で枠の中央まで、小さいほど境界付近だけ。ステップ切替は補間しないので、境界は切り替わったまま。
+   方式ごとの道筋は曲がるので、EDGE_N 区間の表（線形×ゲイン）にしてレンダラへ渡し、表のあいだは光量で線形補間する */
+const EDGE_N = 32;
+function outGain() { return (renderer && renderer.kind === 'HDR') ? hdrGain : 1; }
+// 境界（j=0）から帯の終わり（j=EDGE_N、自分の色）までの表。隣がいない／未着なら null
+// side：'L'＝自分の左の境界（隣は左）、'R'＝右の境界。
+// 補間は必ず「左の枠の色 → 右の枠の色」の向きで評価する（色相回転は補色どうしだと回る向きが
+// 引数の順で変わるため、両側の枠で同じ向きにそろえないと境界で食い違う）
+function edgeLut(rgb, nb, side) {
+  if (!blendOn || !nb || mode === 'step') { return null; }
+  let me = { r: rgb[0], g: rgb[1], b: rgb[2] }, g0 = outGain();
+  let out = new Float32Array((EDGE_N + 1) * 4);
+  for (let j = 0; j <= EDGE_N; j++) {
+    let f = 0.5 * (1 - j / EDGE_N);
+    let c = (side === 'R') ? interp(me, nb, f) : interp(nb, me, 1 - f);
+    let g = g0 + (nb.gain - g0) * f;   // ゲインが枠ごとに違っても境界で一致させる
+    out[j * 4]     = s2l(constrain(c[0], 0, 255) / 255) * g;
+    out[j * 4 + 1] = s2l(constrain(c[1], 0, 255) / 255) * g;
+    out[j * 4 + 2] = s2l(constrain(c[2], 0, 255) / 255) * g;
+    out[j * 4 + 3] = 1;
+  }
+  return out;
+}
+
 /* ---------------- レンダラ検出 ---------------- */
 function refreshRenderer() {
   detectAndInitRenderer().then(function (r) {
@@ -619,10 +782,30 @@ function makeCssRenderer(wide) {
     kind: wide ? 'P3広色域' : 'sRGB',
     draw: function (rgb) {
       let r = constrain(rgb[0], 0, 255), g = constrain(rgb[1], 0, 255), b = constrain(rgb[2], 0, 255);
-      if (wide) {
-        document.body.style.backgroundColor = 'color(display-p3 ' + (r/255).toFixed(4) + ' ' + (g/255).toFixed(4) + ' ' + (b/255).toFixed(4) + ')';
-      } else {
-        document.body.style.backgroundColor = 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+      // 線形値 → CSS の色文字列（P3時は従来どおり、符号値をそのままP3座標として扱う）
+      function css(lin) {
+        let e = [l2s(constrain(lin[0], 0, 1)), l2s(constrain(lin[1], 0, 1)), l2s(constrain(lin[2], 0, 1))];
+        return wide ? 'color(display-p3 ' + e[0].toFixed(4) + ' ' + e[1].toFixed(4) + ' ' + e[2].toFixed(4) + ')'
+                    : 'rgb(' + Math.round(e[0] * 255) + ',' + Math.round(e[1] * 255) + ',' + Math.round(e[2] * 255) + ')';
+      }
+      let own = wide ? 'color(display-p3 ' + (r/255).toFixed(4) + ' ' + (g/255).toFixed(4) + ' ' + (b/255).toFixed(4) + ')'
+                     : 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+      document.body.style.backgroundColor = own;
+      let eL = edgeLut(rgb, nbLeft, 'L'), eR = edgeLut(rgb, nbRight, 'R');
+      if (eL || eR) {
+        // 表の各点を色の停止点として並べる（左：境界→帯の終わり、右：帯の終わり→境界）
+        let stops = [], band = 50 * blendWidth;
+        for (let j = 0; j <= EDGE_N; j++) {
+          stops.push((eL ? css([eL[j*4], eL[j*4+1], eL[j*4+2]]) : own) + ' ' + (band * j / EDGE_N).toFixed(2) + '%');
+        }
+        for (let j = EDGE_N; j >= 0; j--) {
+          stops.push((eR ? css([eR[j*4], eR[j*4+1], eR[j*4+2]]) : own) + ' ' + (100 - band * j / EDGE_N).toFixed(2) + '%');
+        }
+        // 停止点のあいだは、光量（線形）で補間できるブラウザではそうする
+        let sp = (window.CSS && CSS.supports('background-image', 'linear-gradient(to right in srgb-linear, red, blue)')) ? ' in srgb-linear' : '';
+        document.body.style.backgroundImage = 'linear-gradient(to right' + sp + ', ' + stops.join(', ') + ')';
+      } else if (document.body.style.backgroundImage) {
+        document.body.style.backgroundImage = '';
       }
     }
   };
@@ -635,7 +818,13 @@ function makeWebGPURenderer(device, ctx, format) {
     '  gray : vec4<f32>,\n' +
     '  rect : vec4<f32>,\n' +
     '  flags : vec4<f32>,\n' +
+    '  en : vec4<f32>,\n' +       // x：左の境界グラデーション有効、y：右
+    '  lut : array<vec4<f32>, ' + (2 * (EDGE_N + 1)) + '>,\n' +   // 境界→帯の終わりの色の表（線形×ゲイン）。前半＝左、後半＝右
     '};\n' +
+    'fn enc(v0 : vec3<f32>) -> vec3<f32> {\n' +   // 拡張sRGBエンコード（JS側の encExt と同じ）
+    '  let v = max(v0, vec3<f32>(0.0));\n' +
+    '  return select(12.92 * v, 1.055 * pow(v, vec3<f32>(1.0 / 2.4)) - 0.055, v > vec3<f32>(0.0031308));\n' +
+    '}\n' +
     '@group(0) @binding(0) var<uniform> u : U;\n' +
     '@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {\n' +
     '  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0,-3.0), vec2<f32>(-1.0,1.0), vec2<f32>(3.0,1.0));\n' +
@@ -646,10 +835,25 @@ function makeWebGPURenderer(device, ctx, format) {
     '    let d = abs(fc.xy - u.rect.xy);\n' +
     '    if (d.x <= u.rect.z && d.y <= u.rect.w) { return u.gray; }\n' +
     '  }\n' +
+    '  if (u.flags.y > 0.5) {\n' +                       // 境界グラデーション
+    '    let x = fc.x / u.flags.z;\n' +                  // 0..1（枠の左端→右端）
+    '    let t = min(x, 1.0 - x) * 2.0;\n' +             // 0=境界, 1=枠の中央
+    '    let k = clamp(t / u.flags.w, 0.0, 1.0);\n' +
+    '    var on = u.en.x;\n' +
+    '    var base = 0u;\n' +
+    '    if (x > 0.5) { on = u.en.y; base = ' + (EDGE_N + 1) + 'u; }\n' +
+    '    if (on > 0.5) {\n' +
+    '      let p = k * ' + EDGE_N + '.0;\n' +
+    '      let i0 = min(u32(floor(p)), ' + (EDGE_N - 1) + 'u);\n' +
+    '      let c = mix(u.lut[base + i0].rgb, u.lut[base + i0 + 1u].rgb, p - f32(i0));\n' +
+    '      return vec4<f32>(enc(c), 1.0);\n' +
+    '    }\n' +
+    '  }\n' +
     '  return u.bg;\n' +
     '}\n'
   });
-  const uniformBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const UB_FLOATS = 20 + 2 * (EDGE_N + 1) * 4;
+  const uniformBuf = device.createBuffer({ size: UB_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const bgl = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }] });
   const bindGroup = device.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: uniformBuf } }] });
   const pipeline = device.createRenderPipeline({
@@ -681,12 +885,17 @@ function makeWebGPURenderer(device, ctx, format) {
         let dpr = window.devicePixelRatio || 1;
         rcx = cx * dpr; rcy = glay[1] * dpr; rhw = (glay[0] / 2) * dpr; rhh = (glay[0] / 2) * dpr;
       }
-      const data = new Float32Array([
+      let eL = edgeLut(rgb, nbLeft, 'L'), eR = edgeLut(rgb, nbRight, 'R');
+      const data = new Float32Array(UB_FLOATS);
+      data.set([
         bgR, bgG, bgB, 1.0,
         gR, gG, gB, 1.0,
         rcx, rcy, rhw, rhh,
-        showGray, 0.0, 0.0, 0.0
-      ]);
+        showGray, (eL || eR) ? 1.0 : 0.0, Math.max(1, gpu.width), blendWidth,
+        eL ? 1.0 : 0.0, eR ? 1.0 : 0.0, 0.0, 0.0
+      ], 0);
+      if (eL) { data.set(eL, 20); }
+      if (eR) { data.set(eR, 20 + (EDGE_N + 1) * 4); }
       device.queue.writeBuffer(uniformBuf, 0, data);
       const enc = device.createCommandEncoder();
       const view = ctx.getCurrentTexture().createView();
@@ -745,7 +954,7 @@ function drawOutlinedText(s, x, y, size, al) {
 function isCanvasEvent(e) { return !e || !e.target || e.target.tagName === 'CANVAS'; }
 
 function mousePressed(e) {
-  if (!isCanvasEvent(e)) { return; }
+  if (IS_HOST || !isCanvasEvent(e)) { return; }
   if (playMode) { exitPlay(); return; }
   pressX = mouseX; pressY = mouseY; movedFar = false;
   dragIdx = -1; dragDelete = false; dragPlayhead = false;
@@ -773,12 +982,11 @@ function mousePressed(e) {
   }
 }
 function mouseDragged(e) {
+  if (IS_HOST) { return; }
   if (dragPlayhead) {
     movedFar = true;
     let ang = atan2(mouseY - cy, mouseX - cx);
-    let p = wrapAng(ang + HALF_PI) / TWO_PI;
-    let now = paused ? pausedAt : millis();
-    t0 = now - p * loopDur * 1000;
+    setPhase(wrapAng(ang + HALF_PI) / TWO_PI);
     return;
   }
   if (dragXYIdx >= 0) {
@@ -797,6 +1005,7 @@ function mouseDragged(e) {
   dragDelete = dist(mouseX, mouseY, cx, cy) > R * 1.35;
 }
 function mouseReleased(e) {
+  if (IS_HOST) { return; }
   if (dragPlayhead) { dragPlayhead = false; movedFar = false; return; }
   if (dragXYIdx >= 0) { dragXYIdx = -1; movedFar = false; return; }
   let wasTap = !movedFar;
@@ -823,9 +1032,9 @@ function handleTap(x, y) {
   }
 }
 
-function touchStarted(e) { if (!isCanvasEvent(e)) { return; } mousePressed(e); return false; }
-function touchMoved(e) { if (!isCanvasEvent(e)) { return; } mouseDragged(e); return false; }
-function touchEnded(e) { if (!isCanvasEvent(e)) { return; } mouseReleased(e); return false; }
+function touchStarted(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mousePressed(e); return false; }
+function touchMoved(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseDragged(e); return false; }
+function touchEnded(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseReleased(e); return false; }
 
 function openPickerAt(i, x, y) {
   pickTarget = i;
@@ -836,24 +1045,41 @@ function openPickerAt(i, x, y) {
 }
 
 function keyPressed() {
+  if (IS_HOST) { return; }
   if (key === 'f' || key === 'F') { enterPlay(); }
   if (key === ' ') { togglePause(); }
-  if (keyCode === ESCAPE) { exitPlay(); if (infoPanel) { infoPanel.style.display = 'none'; } if (wakeNotice) { wakeNotice.classList.remove('open'); } }
+  if (keyCode === ESCAPE) { exitPlay(); if (infoPanel) { infoPanel.style.display = 'none'; } }
 }
 
+// フルスクリーンは親ページが画面全体で行い、全ペインのUIを同時に消す。
+// 子は親に依頼するだけ（実際の出し入れは親から届く setPlay → applyPlay）
 function enterPlay() {
-  playMode = true;
-  topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
-  if (infoBtn) { infoBtn.style.display = 'none'; }
-  if (infoPanel) { infoPanel.style.display = 'none'; }
-  if (modeSwitch) { modeSwitch.style.display = 'none'; }
-  if (modeModal) { modeModal.classList.remove('open'); }
-  if (fsBtn) { fsBtn.style.display = 'none'; }
-  if (wakeNotice) { wakeNotice.classList.remove('open'); }
-  try { fullscreen(true); } catch (err) {}
+  // 同一オリジンなら、クリックの流れの中で直接フルスクリーンを要求する（ユーザー操作の要件を確実に満たす）
+  let asked = false;
+  try {
+    let el = window.parent.document.documentElement;
+    let fn = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (fn) { let pr = fn.call(el); if (pr && pr.catch) { pr.catch(function () {}); } asked = true; }
+  } catch (err) { /* file:// などで親に触れないときは、親側で要求する */ }
+  toHost({ type: 'play', on: true, asked: asked });
 }
 function exitPlay() {
   if (!playMode) { return; }
+  toHost({ type: 'play', on: false });
+}
+function applyPlay(on) {
+  if (on === playMode) { return; }
+  document.body.classList.toggle('play', on);
+  if (on) {
+    playMode = true;
+    topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
+    if (infoBtn) { infoBtn.style.display = 'none'; }
+    if (infoPanel) { infoPanel.style.display = 'none'; }
+    if (modeSwitch) { modeSwitch.style.display = 'none'; }
+    if (modeModal) { modeModal.classList.remove('open'); }
+    if (fsBtn) { fsBtn.style.display = 'none'; }
+    return;
+  }
   playMode = false;
   // show()が付与するインラインdisplayはCSSと競合するため、クラス制御に戻す
   [topBar, timeBar, colorBar, viewBar].forEach(function (b) {
@@ -862,11 +1088,313 @@ function exitPlay() {
   if (infoBtn) { infoBtn.style.display = 'block'; }
   if (fsBtn) { fsBtn.style.display = 'flex'; }
   if (modeSwitch) { modeSwitch.style.display = ''; }
-  try { fullscreen(false); } catch (err) {}
   // フルスクリーン解除→リサイズ完了を待ってからレイアウトを再計算（崩れ防止）
   setTimeout(function () { layout(); resizeGpu(); applyResponsive(); placeBars(); }, 60);
   setTimeout(function () { layout(); resizeGpu(); applyResponsive(); placeBars(); }, 250);
 }
+
+/* ---------------- 親子間のやり取り（子側） ---------------- */
+function toHost(msg) { try { window.parent.postMessage(msg, '*'); } catch (err) {} }
+
+function initPaneMessaging() {
+  window.addEventListener('message', function (ev) {
+    if (ev.source !== window.parent || !ev.data) { return; }
+    let d = ev.data;
+    if (d.type === 'setPlay') { applyPlay(!!d.on); }
+    else if (d.type === 'wake') { setWakeState(d.state); }
+    else if (d.type === 'getState') { toHost({ type: 'state', id: d.id, state: getState() }); }
+    else if (d.type === 'shared') {
+      sharedUI = !!d.on;
+      document.body.classList.toggle('shared', sharedUI);
+      if (sharedUI && d.mode) { setModeById(d.mode); }
+      if (modeModal) { modeModal.classList.remove('open'); }
+      if (infoPanel) { infoPanel.style.display = 'none'; }
+      layout(); applyResponsive();
+    }
+    else if (d.type === 'setMode') { setModeById(d.mode); }
+    else if (d.type === 'blend') {
+      blendOn = !!d.on; blendWidth = constrain(+d.width || 1, 0.05, 1);
+      hasLeft = !!d.hasLeft; hasRight = !!d.hasRight;
+      if (!blendOn || !hasLeft) { nbLeft = null; }
+      if (!blendOn || !hasRight) { nbRight = null; }
+    }
+    else if (d.type === 'nb' && Array.isArray(d.rgb)) {
+      let nb = { r: +d.rgb[0], g: +d.rgb[1], b: +d.rgb[2], gain: +d.gain || 1 };
+      if (d.side === 'left') { nbLeft = nb; } else { nbRight = nb; }
+    }
+  });
+  toHost({ type: 'ready' });
+}
+
+function setModeById(m) {
+  for (let i = 0; i < MODE_LIST.length; i++) { if (MODE_LIST[i][1] === m) { mode = m; } }
+  updateModeBtns();
+}
+
+// 複製用の状態。phase は壁時計 at の時点の位相。複製先は読み込みにかかった時間ぶん進めて、同じ位相で回り始める
+function getState() {
+  let ph = getPhase();
+  return {
+    points: points.map(function (q) { return { ang: q.ang, r: q.r, g: q.g, b: q.b }; }),
+    mode: mode, loopDur: loopDur, hdrGain: hdrGain,
+    paused: paused, reversed: reversed, phase: ph, at: Date.now(),
+    showXY: showXY, showLumaCheck: showLumaCheck
+  };
+}
+
+function applyStateFromHash() {
+  let m = /[#&]s=([^&]*)/.exec(location.hash);
+  if (!m) { return; }
+  let st;
+  try { st = JSON.parse(decodeURIComponent(m[1])); } catch (err) { return; }
+  if (!st || !Array.isArray(st.points) || st.points.length < 2) { return; }
+  points = st.points.map(function (q) { return { ang: +q.ang, r: +q.r, g: +q.g, b: +q.b }; });
+  for (let i = 0; i < MODE_LIST.length; i++) { if (MODE_LIST[i][1] === st.mode) { mode = st.mode; } }
+  updateModeBtns();
+  if (st.loopDur > 0) { setDur(+st.loopDur); }
+  if (st.hdrGain > 0) { hdrGain = +st.hdrGain; if (gainSlider) { gainSlider.value(hdrGain); } }
+  showXY = !!st.showXY; if (showXY) { xyBtn.addClass('active'); }
+  showLumaCheck = !!st.showLumaCheck; if (showLumaCheck) { checkBtn.addClass('active'); }
+  let ph = +st.phase || 0;
+  if (st.paused) {
+    paused = true; pausedAt = millis();
+    pauseBtn.html('▶');
+  } else if (isFinite(st.at)) {
+    ph += (st.reversed ? -1 : 1) * (Date.now() - st.at) / (loopDur * 1000);
+    ph -= Math.floor(ph);
+  }
+  setReversed(!!st.reversed);
+  setPhase(ph);
+}
+
+/* ---------------- 画面分割（親側） ----------------
+   左右の＋で、その側の端にあるタイムラインを複製して並べる。幅は常に均等 */
+function buildHost() {
+  document.body.classList.add('host');
+  let wrap = document.createElement('div');
+  wrap.id = 'panes';
+  document.body.appendChild(wrap);
+
+  [['splitLeft', 'left', '左にタイムラインを追加'], ['splitRight', 'right', '右にタイムラインを追加']].forEach(function (d) {
+    let b = document.createElement('button');
+    b.id = d[0]; b.className = 'splitBtn'; b.textContent = '+'; b.title = d[2];
+    b.setAttribute('aria-label', d[2]);
+    b.addEventListener('click', function () { b.blur(); addPane(d[1]); });
+    document.body.appendChild(b);
+  });
+
+  // ---- 共通バー（2つ以上に分割しているあいだだけ出る） ----
+  hostBar = document.createElement('div');
+  hostBar.id = 'hostBar';
+  document.body.appendChild(hostBar);
+  buildModeUI(hostBar, function (m) { mode = m; updateModeBtns(); hostBroadcast({ type: 'setMode', mode: m }); });
+
+  fsBtn = document.createElement('button');
+  fsBtn.id = 'fsBtn';
+  fsBtn.innerHTML = '<span style="font-size:17px">\u26f6</span> フルスクリーン';
+  fsBtn.title = 'フルスクリーン';
+  hostBar.appendChild(fsBtn);
+  fsBtn.addEventListener('click', function () { fsBtn.blur(); hostSetPlay(true, false); });
+
+  blendBtn = document.createElement('button');
+  blendBtn.id = 'blendBtn';
+  blendBtn.textContent = '境界グラデーション';
+  blendBtn.title = '隣り合うタイムラインの境界を、光のグラデーションでつなぐ';
+  hostBar.appendChild(blendBtn);
+  let bw = document.createElement('input');
+  bw.type = 'range'; bw.id = 'blendW'; bw.min = '0.05'; bw.max = '1'; bw.step = '0.05'; bw.value = String(blendWidth);
+  bw.title = 'グラデーションの幅（右端＝枠の中央まで）';
+  bw.setAttribute('aria-label', 'グラデーションの幅');
+  hostBar.appendChild(bw);
+  blendBtn.addEventListener('click', function () {
+    blendBtn.blur();
+    blendOn = !blendOn;
+    blendBtn.classList.toggle('active', blendOn);
+    hostSyncPanes();
+  });
+  bw.addEventListener('input', function () { blendWidth = parseFloat(bw.value) || 1; hostSyncPanes(); });
+
+  buildInfoUI(hostBar);
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') {
+      if (infoPanel) { infoPanel.style.display = 'none'; }
+      if (modeModal) { modeModal.classList.remove('open'); }
+    }
+  });
+
+  window.addEventListener('message', onHostMessage);
+  window.addEventListener('resize', hostLayoutPanes);
+  ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (n) {
+    document.addEventListener(n, function () {
+      // Esc などでブラウザ側がフルスクリーンを解いたとき、UIも戻す
+      if (!hostFsElement() && playMode) { hostSetPlay(false, true); }
+    });
+  });
+  createPane('right', null);
+}
+
+function hostFsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+
+function createPane(side, state) {
+  let wrap = document.getElementById('panes');
+  let div = document.createElement('div');
+  div.className = 'pane';
+  let f = document.createElement('iframe');
+  f.setAttribute('allow', 'fullscreen');
+  f.title = 'タイムライン';
+  f.src = location.pathname.split('/').pop() + '?pane=1' + (state ? '#s=' + encodeURIComponent(JSON.stringify(state)) : '');
+  let x = document.createElement('button');
+  x.className = 'paneClose'; x.textContent = '×'; x.title = 'このタイムラインを閉じる';
+  x.setAttribute('aria-label', 'このタイムラインを閉じる');
+  // 追加するときは全体を均等に割り直す（幅の調整はその後で）
+  hostPanes.forEach(function (q) { q.weight = 1; });
+  let pane = { div: div, frame: f, weight: 1 };
+  x.addEventListener('click', function () { removePane(pane); });
+  div.appendChild(f); div.appendChild(x);
+  if (side === 'left') { wrap.insertBefore(div, wrap.firstChild); hostPanes.unshift(pane); }
+  else { wrap.appendChild(div); hostPanes.push(pane); }
+  hostSyncPanes();
+}
+
+// 分割数・共通設定を全ペインへ配り直す（追加・削除・設定変更のたびに呼ぶ）
+// 各枠の右端のx座標（整数px）。幅は枠ごとの重み weight の比で配分する
+function hostEdges() {
+  let W = window.innerWidth, total = 0, acc = 0;
+  hostPanes.forEach(function (q) { total += q.weight; });
+  return hostPanes.map(function (q) { acc += q.weight; return Math.round(W * acc / total); });
+}
+function hostLayoutPanes() {
+  let edges = hostEdges();
+  hostPanes.forEach(function (q, i) {
+    q.div.style.flex = '0 0 ' + (edges[i] - (i > 0 ? edges[i - 1] : 0)) + 'px';
+  });
+  // 境界のつまみを、枠の数に合わせて作り直して置く
+  let ds = document.querySelectorAll('.paneDivider');
+  if (ds.length !== hostPanes.length - 1) {
+    ds.forEach(function (d) { d.remove(); });
+    for (let k = 0; k < hostPanes.length - 1; k++) { makeDivider(k); }
+    ds = document.querySelectorAll('.paneDivider');
+  }
+  ds.forEach(function (d, k) { d.style.left = edges[k] + 'px'; });
+}
+// k番目とk+1番目の枠のあいだのつまみ。2つの枠の合計幅は変えず、配分だけ動かす
+function makeDivider(k) {
+  let d = document.createElement('div');
+  d.className = 'paneDivider';
+  d.title = 'ドラッグで幅を調整（ダブルクリックで均等に戻す）';
+  document.body.appendChild(d);
+  let dragging = false;
+  d.addEventListener('pointerdown', function (ev) {
+    dragging = true; d.classList.add('drag');
+    try { d.setPointerCapture(ev.pointerId); } catch (err) {}
+    ev.preventDefault();
+  });
+  d.addEventListener('pointermove', function (ev) {
+    if (!dragging) { return; }
+    let edges = hostEdges();
+    let L = k > 0 ? edges[k - 1] : 0, Rr = edges[k + 1];
+    let minW = Math.min(220, (Rr - L) / 2);   // 時間バーが収まる幅
+    let x = Math.max(L + minW, Math.min(Rr - minW, ev.clientX));
+    let sum = hostPanes[k].weight + hostPanes[k + 1].weight;
+    hostPanes[k].weight = sum * (x - L) / (Rr - L);
+    hostPanes[k + 1].weight = sum - hostPanes[k].weight;
+    hostLayoutPanes();
+  });
+  let end = function () { dragging = false; d.classList.remove('drag'); };
+  d.addEventListener('pointerup', end);
+  d.addEventListener('pointercancel', end);
+  d.addEventListener('dblclick', function () {
+    hostPanes.forEach(function (q) { q.weight = 1; });
+    hostLayoutPanes();
+  });
+}
+function hostSyncPanes() {
+  hostLayoutPanes();
+  let multi = hostPanes.length > 1;
+  document.body.classList.toggle('multi', multi);
+  if (!multi) {
+    if (modeModal) { modeModal.classList.remove('open'); }
+    if (infoPanel) { infoPanel.style.display = 'none'; }
+  }
+  hostPanes.forEach(function (q) { hostSendConfig(q); });
+}
+function hostSendConfig(q) {
+  let i = hostPanes.indexOf(q), multi = hostPanes.length > 1;
+  try {
+    let w = q.frame.contentWindow;
+    w.postMessage({ type: 'shared', on: multi, mode: mode }, '*');
+    w.postMessage({ type: 'blend', on: multi && blendOn, width: blendWidth, hasLeft: i > 0, hasRight: i < hostPanes.length - 1 }, '*');
+  } catch (err) {}
+}
+
+function removePane(pane) {
+  if (hostPanes.length <= 1) { return; }
+  hostPanes = hostPanes.filter(function (q) { return q !== pane; });
+  pane.div.remove();
+  hostSyncPanes();
+}
+
+function addPane(side) {
+  let src = (side === 'left') ? hostPanes[0] : hostPanes[hostPanes.length - 1];
+  let id = ++hostReqId, done = false;
+  function finish(state) {
+    if (done) { return; }
+    done = true; delete hostStateWaiters[id];
+    // 分割を始めるときは、複製元の方式を共通の方式にする
+    if (state && hostPanes.length === 1) { setModeById(state.mode); }
+    createPane(side, state);
+  }
+  hostStateWaiters[id] = finish;
+  try { src.frame.contentWindow.postMessage({ type: 'getState', id: id }, '*'); } catch (err) {}
+  setTimeout(function () { finish(null); }, 600);   // 返事がなければ初期状態で作る
+}
+
+function hostBroadcast(msg) {
+  hostPanes.forEach(function (q) { try { q.frame.contentWindow.postMessage(msg, '*'); } catch (err) {} });
+}
+
+function onHostMessage(ev) {
+  let d = ev.data;
+  if (!d || !hostPanes.some(function (q) { return q.frame.contentWindow === ev.source; })) { return; }
+  if (d.type === 'color') {
+    // 現在色を両隣へ中継する
+    let i = -1;
+    for (let k = 0; k < hostPanes.length; k++) { if (hostPanes[k].frame.contentWindow === ev.source) { i = k; } }
+    if (i > 0) { hostPanes[i - 1].frame.contentWindow.postMessage({ type: 'nb', side: 'right', rgb: d.rgb, gain: d.gain }, '*'); }
+    if (i >= 0 && i < hostPanes.length - 1) { hostPanes[i + 1].frame.contentWindow.postMessage({ type: 'nb', side: 'left', rgb: d.rgb, gain: d.gain }, '*'); }
+    return;
+  }
+  if (d.type === 'ready') {
+    let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
+    if (me) { hostSendConfig(me); }
+    ev.source.postMessage({ type: 'wake', state: wakeState }, '*');
+    if (playMode) { ev.source.postMessage({ type: 'setPlay', on: true }, '*'); }
+  } else if (d.type === 'state') {
+    if (hostStateWaiters[d.id]) { hostStateWaiters[d.id](d.state); }
+  } else if (d.type === 'play') {
+    hostSetPlay(!!d.on, !!d.asked);
+  } else if (d.type === 'gesture') {
+    requestWakeLock(true);
+  }
+}
+
+// on=true：全ペインのUIを消してフルスクリーンへ／false：戻す。fsDone は「フルスクリーンの切替は済み（または不要）」
+function hostSetPlay(on, fsDone) {
+  playMode = on;
+  document.body.classList.toggle('playing', on);
+  if (on && wakeNotice) { wakeNotice.classList.remove('open'); }
+  hostBroadcast({ type: 'setPlay', on: on });
+  try {
+    if (on && !fsDone && !hostFsElement()) {
+      let el = document.documentElement, fn = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (fn) { let pr = fn.call(el); if (pr && pr.catch) { pr.catch(function () {}); } }
+    } else if (!on && hostFsElement()) {
+      let fn = document.exitFullscreen || document.webkitExitFullscreen;
+      if (fn) { let pr = fn.call(document); if (pr && pr.catch) { pr.catch(function () {}); } }
+    }
+  } catch (err) {}
+}
+
 function togglePause() {
   if (!paused) { pausedAt = millis(); paused = true; }
   else { t0 += millis() - pausedAt; paused = false; }
@@ -879,6 +1407,13 @@ function togglePause() {
    ・読み込み直後の要求が拒否される環境がある → 最初の操作（ユーザー操作）で取り直す
    ・API非対応／拒否のときは、端末側の自動ロックを切るよう案内する */
 function initWakeLock() {
+  if (IS_PANE) {
+    // ロックは親ページが持つ。子は「操作があった」ことだけ伝える（保持中は送らない）
+    let ping = function () { if (wakeState !== 'on') { toHost({ type: 'gesture' }); } };
+    document.addEventListener('pointerdown', ping, true);
+    document.addEventListener('keydown', ping, true);
+    return;
+  }
   wakeNotice = document.createElement('div');
   wakeNotice.id = 'wakeNotice';
   wakeNotice.innerHTML = '<div class="card"><b>この環境では、画面のスリープを自動で防げません。</b><br>' +
@@ -920,6 +1455,7 @@ function requestWakeLock(fromGesture) {
 
 function setWakeState(s) {
   wakeState = s;
+  if (IS_HOST) { hostBroadcast({ type: 'wake', state: s }); }
   let el = document.getElementById('wakeStatus');
   if (!el) { return; }
   let ok = (s === 'on');
@@ -950,8 +1486,7 @@ function setDur(v) {
   v = constrain(v, 0.5, 120);
   let p = getPhase();
   loopDur = v;
-  let now = paused ? pausedAt : millis();
-  t0 = now - p * loopDur * 1000;
+  setPhase(p);
   durNum.value(v); durSlider.value(v);
 }
 
@@ -1287,9 +1822,11 @@ function drawXYDiagram(sorted, cur) {
 
 function applyResponsive() {
   if (playMode) { return; }
-  isNarrow = windowWidth <= 820;
+  isNarrow = window.innerWidth <= 820;
   if (isNarrow) { document.body.classList.add('narrowLayout'); }
   else { document.body.classList.remove('narrowLayout'); }
+  // 分割中の細い枠は簡略表示にする
+  document.body.classList.toggle('compact', isCompact());
   placeBars();
 }
 
@@ -1326,6 +1863,11 @@ function buildUI() {
   durSlider.input(function () { setDur(durSlider.value()); });
   pauseBtn = createButton('⏸'); pauseBtn.parent(timeBar);
   pauseBtn.mousePressed(togglePause);
+  pauseBtn.attribute('title', '一時停止／再開');
+  revBtn = createButton('\u21bb'); revBtn.parent(timeBar);
+  revBtn.attribute('title', '回転の向きを逆にする'); revBtn.attribute('aria-label', '回転の向きを逆にする');
+  revBtn.style('font-size', '17px'); revBtn.style('padding-top', '4px'); revBtn.style('padding-bottom', '5px');
+  revBtn.mousePressed(function () { setReversed(!reversed); });
 
   // 色の設定（サークルの下）
   colorBar = createDiv('').class('bar'); colorBar.id('colorBar');
@@ -1335,6 +1877,7 @@ function buildUI() {
   createSpan('HDR輝度').parent(gainWrap);
   let gs = createSlider(1.0, 4.0, hdrGain, 0.1); gs.parent(gainWrap); gs.style('width', '110px');
   gs.input(function () { hdrGain = gs.value(); });
+  gainSlider = gs;
   let lumaWrap = createDiv('').parent(colorBar);
   lumaWrap.style('display', 'flex'); lumaWrap.style('align-items', 'center'); lumaWrap.style('gap', '8px');
   createSpan('知覚明度統一').parent(lumaWrap);
@@ -1367,11 +1910,40 @@ function buildUI() {
     if (showLumaCheck) { checkBtn.addClass('active'); } else { checkBtn.removeClass('active'); }
   });
 
-  // ---- 補間方式スイッチ（サークル上部）＋ 選択モーダル ----
+  buildModeUI(document.body, function (m) { mode = m; updateModeBtns(); });
+
+  // ---- フルスクリーン（独立の固定ボタン） ----
+  fsBtn = document.createElement('button');
+  fsBtn.id = 'fsBtn';
+  fsBtn.innerHTML = '<span style="font-size:18px">\u26f6</span> フルスクリーン';
+  fsBtn.title = 'フルスクリーン';
+  document.body.appendChild(fsBtn);
+  fsBtn.addEventListener('click', function () { enterPlay(); });
+
+  buildInfoUI(document.body);
+
+  // ---- 簡略表示のときだけ出る「⋯」（観察トグルと色設定の出し入れ） ----
+  moreBtn = document.createElement('button');
+  moreBtn.id = 'moreBtn';
+  moreBtn.textContent = '\u22ef';
+  moreBtn.title = '観察・色の設定を開く／閉じる';
+  moreBtn.setAttribute('aria-label', '観察・色の設定を開く／閉じる');
+  document.body.appendChild(moreBtn);
+  moreBtn.addEventListener('click', function () {
+    document.body.classList.toggle('moreOpen');
+    placeBars();
+  });
+
+  // すべてのUIが揃ってから配置を確定する（生成前に呼ぶと位置が決まらない）
+  applyResponsive();
+  placeBars();
+}
+// 補間方式スイッチ＋選択モーダル。子ではサークル上、親では共通バーに置く
+function buildModeUI(parentEl, onPick) {
   modeSwitch = document.createElement('button');
   modeSwitch.id = 'modeSwitch';
   modeSwitch.innerHTML = '<span id="modeSwitchLabel"></span><span class="caret">\u25bc</span>';
-  document.body.appendChild(modeSwitch);
+  parentEl.appendChild(modeSwitch);
   modeSwitch.addEventListener('click', function () { modeModal.classList.add('open'); });
 
   modeModal = document.createElement('div');
@@ -1387,36 +1959,27 @@ function buildUI() {
   modeModal.addEventListener('click', function (ev) {
     if (ev.target === modeModal) { modeModal.classList.remove('open'); }
   });
-
-  // topBar のボタンをモーダルへ複製（topBar自体はCSSで非表示）
   MODE_LIST.forEach(function (item) {
     let b = document.createElement('button');
     b.textContent = item[0];
     b.dataset.mode = item[1];
     b.addEventListener('click', function () {
-      mode = item[1];
-      updateModeBtns();
+      onPick(item[1]);
       modeModal.classList.remove('open');
     });
     sheet.appendChild(b);
     modalModeBtns[item[1]] = b;
   });
   updateModeBtns();
+}
 
-  // ---- フルスクリーン（独立の固定ボタン） ----
-  fsBtn = document.createElement('button');
-  fsBtn.id = 'fsBtn';
-  fsBtn.innerHTML = '<span style="font-size:18px">\u26f6</span> フルスクリーン';
-  fsBtn.title = 'フルスクリーン';
-  document.body.appendChild(fsBtn);
-  fsBtn.addEventListener('click', function () { enterPlay(); });
-
+function buildInfoUI(parentEl) {
   // ---- インフォメーション（丸i） ----
   infoBtn = document.createElement('button');
   infoBtn.id = 'infoBtn';
   infoBtn.textContent = 'i';
   infoBtn.title = '使い方';
-  document.body.appendChild(infoBtn);
+  parentEl.appendChild(infoBtn);
 
   infoPanel = document.createElement('div');
   infoPanel.id = 'infoPanel';
@@ -1431,8 +1994,11 @@ function buildUI() {
     '<li><b>色点を2回タップ／ダブルクリック</b> — カラーピッカーで色を変更</li>' +
     '<li><b>リングの帯をタップ</b> — その位置に色点を追加</li>' +
     '<li><b>白い針（再生ヘッド）をドラッグ</b> — 再生位置を動かす</li>' +
-    '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ</li>' +
+    '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ　<b>↻ボタン</b> — 回転の向きを逆にする（針の位置はそのまま）</li>' +
     '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
+    '<li><b>画面の左右にある ＋</b> — 画面を均等に分割し、その側にタイムラインを複製して並べる（何度でも増やせます）。<b>左上の ×</b> でそのタイムラインを閉じる。<b>境界のつまみ</b>を左右にドラッグすると幅の配分を変えられます（ダブルクリックで均等に戻す）</li>' +
+    '<li><b>分割中の上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。横のスライダーは幅（右端＝枠の中央まで）</li>' +
+    '<li><b>⋯</b>（分割して細くなったとき）— xy色度図・輝度検証・色の設定を開閉</li>' +
     '</ul>' +
     '<h3>パネル</h3>' +
     '<ul>' +
@@ -1466,11 +2032,8 @@ function buildUI() {
 
   infoBtn.addEventListener('click', function () { infoPanel.style.display = 'block'; });
   infoPanel.addEventListener('click', function () { infoPanel.style.display = 'none'; });
-
-  // すべてのUIが揃ってから配置を確定する（生成前に呼ぶと位置が決まらない）
-  applyResponsive();
-  placeBars();
 }
+
 function updateModeBtns() {
   // モーダル内のボタンの選択状態
   for (let k in modalModeBtns) {

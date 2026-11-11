@@ -4,6 +4,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>光のグラデーション・タイムライン（HDR対応）</title>
+<!-- PWA：ホーム画面に追加すると、ブラウザの枠なしで起動できる -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#000000" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="光タイムライン" />
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <style>
   html, body { margin: 0; padding: 0; background: #000; overflow: hidden; height: 100%; }
   #stage { position: fixed; inset: 0; }
@@ -141,6 +150,31 @@
   #infoPanel li { font-size: 13.5px; line-height: 1.95; color: rgba(255,255,255,0.92); margin: 2px 0; }
   #infoPanel b { color: #fff; font-weight: 600; }
   #infoPanel .closeHint { text-align: center; font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 26px; }
+  #infoPanel .wakeStatus {
+    font-size: 13.5px; line-height: 1.8; margin: 8px 0; padding: 8px 12px; border-radius: 10px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+  }
+  #infoPanel .wakeStatus.warn { background: rgba(255,170,60,0.16); border-color: rgba(255,190,100,0.5); }
+  /* スリープを防げない環境への案内（一度だけ出る。どこかをタップで閉じる）
+     他のUIと重ならないよう、方式モーダルと同じ暗転オーバーレイにする */
+  #wakeNotice {
+    position: fixed; inset: 0; z-index: 35; display: none;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    align-items: center; justify-content: center; cursor: pointer;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+  }
+  #wakeNotice.open { display: flex; }
+  #wakeNotice .card {
+    max-width: min(440px, 84vw); box-sizing: border-box;
+    padding: 20px 22px; border-radius: 18px;
+    background: rgba(40,28,10,0.85);
+    border: 1px solid rgba(255,190,100,0.55); color: #ffe9c8;
+    font-size: 14px; line-height: 1.8;
+    box-shadow: 0 16px 60px rgba(0,0,0,0.5);
+  }
+  #wakeNotice .card b { color: #fff; }
+  #wakeNotice .card .closeHint { display: block; margin-top: 10px; font-size: 12px; color: rgba(255,233,200,0.6); text-align: center; }
   #errbox {
     position: absolute; left: 12px; top: 12px; z-index: 99; display: none;
     max-width: 60vw; padding: 10px 12px; border-radius: 10px;
@@ -202,6 +236,9 @@ const MODE_LIST = [
   ['CIELab 中間混色', 'cielabLin']
 ];
 let fsBtn = null;
+let wakeLock = null;          // WakeLockSentinel（保持中のみ非null）
+let wakeState = 'pending';    // pending | on | unsupported | failed
+let wakeRequesting = false, wakeNotice = null, wakeNoticeShown = false;
 let topBar, timeBar, colorBar, viewBar, pauseBtn, durNum, durSlider, gainNum, gainWrap, restoreBtn = null, checkBtn, xyBtn, modeBtns = {};
 let lumaSegBtns = {}, lumaMode = 'none';
 let modeLabels = {};
@@ -233,6 +270,8 @@ function setup() {
   });
 
   buildUI();
+  initWakeLock();
+  registerServiceWorker();
   t0 = millis();
 
   // レンダラを検出・初期化（非同期）。決まるまではsRGBで暫定描画
@@ -799,7 +838,7 @@ function openPickerAt(i, x, y) {
 function keyPressed() {
   if (key === 'f' || key === 'F') { enterPlay(); }
   if (key === ' ') { togglePause(); }
-  if (keyCode === ESCAPE) { exitPlay(); if (infoPanel) { infoPanel.style.display = 'none'; } }
+  if (keyCode === ESCAPE) { exitPlay(); if (infoPanel) { infoPanel.style.display = 'none'; } if (wakeNotice) { wakeNotice.classList.remove('open'); } }
 }
 
 function enterPlay() {
@@ -810,6 +849,7 @@ function enterPlay() {
   if (modeSwitch) { modeSwitch.style.display = 'none'; }
   if (modeModal) { modeModal.classList.remove('open'); }
   if (fsBtn) { fsBtn.style.display = 'none'; }
+  if (wakeNotice) { wakeNotice.classList.remove('open'); }
   try { fullscreen(true); } catch (err) {}
 }
 function exitPlay() {
@@ -831,6 +871,77 @@ function togglePause() {
   if (!paused) { pausedAt = millis(); paused = true; }
   else { t0 += millis() - pausedAt; paused = false; }
   pauseBtn.html(paused ? '▶' : '⏸');
+}
+
+/* ---------------- 画面スリープ防止（Screen Wake Lock） ----------------
+   画面が光源なので、表示中は常にスリープを止める。
+   ・ロックはタブが隠れるとOSに解放される → 再表示のたびに取り直す
+   ・読み込み直後の要求が拒否される環境がある → 最初の操作（ユーザー操作）で取り直す
+   ・API非対応／拒否のときは、端末側の自動ロックを切るよう案内する */
+function initWakeLock() {
+  wakeNotice = document.createElement('div');
+  wakeNotice.id = 'wakeNotice';
+  wakeNotice.innerHTML = '<div class="card"><b>この環境では、画面のスリープを自動で防げません。</b><br>' +
+    '制作の前に、端末の自動ロック（画面オフ）を「なし」にしてください。手順は右上の i にあります。' +
+    '<span class="closeHint">画面のどこかをタップすると閉じます</span></div>';
+  wakeNotice.addEventListener('click', function () { wakeNotice.classList.remove('open'); });
+  document.body.appendChild(wakeNotice);
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') { requestWakeLock(false); }
+  });
+  // ユーザー操作を起点にした取り直し（保持中は何もしない）
+  document.addEventListener('pointerdown', function () { requestWakeLock(true); }, true);
+  document.addEventListener('keydown', function () { requestWakeLock(true); }, true);
+  requestWakeLock(false);
+}
+
+function requestWakeLock(fromGesture) {
+  if (!('wakeLock' in navigator)) { setWakeState('unsupported'); showWakeNotice(); return; }
+  if (wakeLock || wakeRequesting || document.visibilityState !== 'visible') { return; }
+  wakeRequesting = true;
+  navigator.wakeLock.request('screen').then(function (sentinel) {
+    wakeRequesting = false;
+    wakeLock = sentinel;
+    setWakeState('on');
+    if (wakeNotice) { wakeNotice.classList.remove('open'); }
+    sentinel.addEventListener('release', function () {
+      wakeLock = null;
+      // 表示中なのに解放された（省電力モードなど）。次の操作で取り直す
+      setWakeState(document.visibilityState === 'visible' ? 'failed' : 'pending');
+    });
+  }).catch(function () {
+    wakeRequesting = false;
+    // 操作なしの要求が拒否されただけなら、最初の操作での取り直しを待つ
+    setWakeState(fromGesture ? 'failed' : 'pending');
+    if (fromGesture) { showWakeNotice(); }
+  });
+}
+
+function setWakeState(s) {
+  wakeState = s;
+  let el = document.getElementById('wakeStatus');
+  if (!el) { return; }
+  let ok = (s === 'on');
+  el.classList.toggle('warn', !ok && s !== 'pending');
+  el.textContent =
+    ok ? '現在の状態：有効（このページを表示しているあいだ、画面は消えません）' :
+    s === 'unsupported' ? '現在の状態：この環境では使えません。下の手順で端末の自動ロックを切ってください' :
+    s === 'failed' ? '現在の状態：無効（省電力モードなどで拒否されました）。下の手順で端末の自動ロックを切ってください' :
+    '現在の状態：確認中（画面を一度タップすると有効になります）';
+}
+
+function showWakeNotice() {
+  if (wakeNoticeShown || playMode || !wakeNotice) { return; }
+  wakeNoticeShown = true;
+  wakeNotice.classList.add('open');
+}
+
+/* ---------------- PWA（オフライン起動用のサービスワーカー） ---------------- */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) { return; }
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') { return; }
+  navigator.serviceWorker.register('sw.js').catch(function () { /* 登録できなくても本体は動く */ });
 }
 
 /* ---------------- UI ---------------- */
@@ -1329,6 +1440,14 @@ function buildUI() {
     '<li><b>xy色度図</b> — 色点と現在色をCIE xy平面に写します。<b>xy図のみ表示のとき、図上の点をドラッグして色を直接編集</b>できます（明るさYは保たれます）</li>' +
     '<li><b>知覚明度(OKLab)で統一</b> — 全色点のOKLab明度を最低／平均に揃えます（「元に戻す」で復元）</li>' +
     '<li><b>HDR輝度</b>（HDR対応環境のみ）— SDRの白(1.0)を超える光の持ち上げ量</li>' +
+    '</ul>' +
+    '<h3>画面を消さないために</h3>' +
+    '<p class="wakeStatus" id="wakeStatus">現在の状態：確認中</p>' +
+    '<ul>' +
+    '<li>このページは、表示しているあいだ<b>画面のスリープを自動で止めます</b>（Screen Wake Lock）。別のタブやアプリに切り替えると解除され、戻ると再び有効になります</li>' +
+    '<li>「使えません／無効」と出る環境では、<b>端末側の自動ロックを切って</b>ください。iPhone・iPad：設定 → 画面表示と明るさ → 自動ロック → なし／Android：設定 → ディスプレイ → 画面消灯（スリープ）を最長に／Mac：システム設定 → ロック画面 → ディスプレイをオフにする → しない／Windows：設定 → システム → 電源 → 画面の電源を切る → なし</li>' +
+    '<li>省電力（低電力）モードでは無効になることがあります。長時間の制作は<b>電源につないで</b>行ってください</li>' +
+    '<li><b>ホーム画面に追加</b>（iPhone・iPad：共有 → ホーム画面に追加／Chrome・Edge：アドレスバーのインストール）すると、ブラウザの枠なしで起動でき、一度開いた後はオフラインでも動きます</li>' +
     '</ul>' +
     '<h3>色の変換についての注意</h3>' +
     '<ul>' +

@@ -1915,6 +1915,7 @@ function initPaneMessaging() {
       hdrGain = constrain(+d.value, 1, 4);
       if (gainSlider) { gainSlider.value = String(hdrGain); }
     }
+    else if (d.type === 'lumaCommit') { commitLuma(); }
     else if (d.type === 'luma') {
       // 親の「全体の色」：常に元の色から適用し直す。target は全枠の色点から親が決めた明度
       if (lumaSnapshot) { restoreLuma(); }
@@ -2087,13 +2088,17 @@ function buildGlobalUI() {
   });
   hostLumaBtns.maxc = el('button', { text: '彩度最大', parent: lr, on: { click: function (ev) { ev.currentTarget.blur(); hostApplyLuma('maxc'); } } });
   hostRestoreBtn = el('button', { text: '戻る', parent: lr, style: { display: 'none' }, on: { click: function (ev) { ev.currentTarget.blur(); hostApplyLuma('none'); } } });
+  hostCommitBtn = el('button', { text: 'この色で確定', parent: lr, style: { display: 'none' },
+    title: '明度をそろえた今の色を、全部のタイムラインの色点の色として上書きする（戻るで元に戻せなくなる）',
+    on: { click: function (ev) { ev.currentTarget.blur(); hostLumaMode = 'none'; hostSetLumaActive(); hostBroadcast({ type: 'lumaCommit' }); } } });
   // 明度統一の方針の説明（i で開閉）
   let help = el('div', { cls: 'lumaHelp', parent: globalPop, html:
     '<p><b>最低</b>：全部のタイムラインの色点のうち、いちばん暗い色の明度（OKLab の L）に、すべての色をそろえます。</p>' +
     '<p><b>平均</b>：全部の色点の明度の平均に、すべての色をそろえます。</p>' +
     '<p>どちらも色相はそのままで、明度だけを動かします。明度を動かすと画面に出せる色の範囲（sRGB）からはみ出す色は、色相を保ったまま彩度を下げて収めます（とくに明るくする側の青など）。</p>' +
     '<p><b>彩度最大</b>：明度と色相はそのままで、彩度だけを出せる上限まで上げます。</p>' +
-    '<p>どのボタンも、明度をそろえる前の<b>元の色</b>から毎回計算し直します（今の色に重ねてはかけません）。そのため「最低」のあとに「平均」を押すと、元の色の平均にそろいます。<b>戻る</b>で元の色に戻ります。</p>' });
+    '<p>どのボタンも、明度をそろえる前の<b>元の色</b>から毎回計算し直します（今の色に重ねてはかけません）。そのため「最低」のあとに「平均」を押すと、元の色の平均にそろいます。<b>戻る</b>で元の色に戻ります。</p>' +
+    '<p><b>この色で確定</b>：そろえた今の色を、各タイムラインの色点の色として上書きします。以後のボタンは、確定した色を元の色として計算します（戻るでは確定前に戻せません）。</p>' });
   let infoB = el('button', { text: 'i', cls: 'lumaInfo', parent: lr, title: '明度統一の方針を表示する', on: { click: function (ev) {
     ev.currentTarget.blur();
     let open = !help.classList.contains('open');
@@ -2122,6 +2127,7 @@ function placeGlobalPop() {
 function hostSetLumaActive() {
   for (let k in hostLumaBtns) { hostLumaBtns[k].classList.toggle('active', k === hostLumaMode); }
   if (hostRestoreBtn) { hostRestoreBtn.style.display = hostLumaMode === 'none' ? 'none' : 'inline-block'; }
+  if (hostCommitBtn) { hostCommitBtn.style.display = hostLumaMode === 'none' ? 'none' : 'inline-block'; }
 }
 // 全部の枠から元の色（明度統一する前）を集め、基準の明度を決めて配る
 function hostApplyLuma(kind) {
@@ -2430,7 +2436,7 @@ function hostUpdateKinds() {
   setDispKind(low, low !== best ? '。一部の枠で ' + best + ' を使えなかったため、境界がそろうよう全部の枠を ' + low + ' にそろえています' : '');
 }
 let hostAllowedKind = 'HDR';
-let hostGain = 1.6, hostGainSlider = null, hostGainRow = null, hostLumaMode = 'none', hostLumaBtns = {}, hostRestoreBtn = null, globalPop = null, globalBtn = null;
+let hostGain = 1.6, hostGainSlider = null, hostGainRow = null, hostLumaMode = 'none', hostLumaBtns = {}, hostRestoreBtn = null, hostCommitBtn = null, globalPop = null, globalBtn = null;
 
 function hostSyncPanes() {
   hostRebuildDividers();
@@ -2730,6 +2736,12 @@ function inGamut(L, C, H) {
   return R >= -eps && R <= 1 + eps && G >= -eps && G <= 1 + eps && B >= -eps && B <= 1 + eps;
 }
 
+// 明度統一の結果を、そのまま色点の色として確定する（元の色を上書き）。以後のボタンはこの色から計算する
+function commitLuma() {
+  lumaSnapshot = null; lumaMode = 'none';
+  setLumaSegActive(); updateLumaButtons();
+}
+
 function restoreLuma() {
   if (!lumaSnapshot) { return; }
   for (let i = 0; i < points.length && i < lumaSnapshot.length; i++) {
@@ -2744,7 +2756,9 @@ function restoreLuma() {
 function updateLumaButtons() {
   if (!restoreBtn) { return; }
   restoreBtn.style.display = lumaSnapshot ? 'inline-block' : 'none';
+  if (commitBtn) { commitBtn.style.display = lumaSnapshot ? 'inline-block' : 'none'; }
 }
+let commitBtn = null;
 
 // グレー基準面とxy図の共有レイアウト：両方表示なら円内を上下に等分
 function grayLayout() {
@@ -3037,6 +3051,9 @@ function buildUI() {
   restoreBtn = el('button', { text: '戻る', parent: colorBar, style: { display: 'none' }, on: { click: function () {
     restoreBtn.blur(); restoreLuma(); lumaMode = 'none'; setLumaSegActive();
   } } });
+  commitBtn = el('button', { text: 'この色で確定', parent: colorBar, style: { display: 'none' },
+    title: '明度をそろえた今の色を、色点の色として上書きする（戻るで元に戻せなくなる）',
+    on: { click: function (ev) { ev.currentTarget.blur(); commitLuma(); } } });
   el('button', { text: '彩度最大', parent: colorBar, on: { click: function (ev) { ev.currentTarget.blur(); equalizeLuma('maxc'); } } });
 
   // 段の出し入れ（戻る・HDR輝度の表示など）でパネルの高さが変わったら、リングの大きさを測り直す
@@ -3153,7 +3170,7 @@ function buildInfoUI(parentEl) {
     '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
     '<li><b>枠の四辺にある ＋</b> — その枠を二分して、押した側に複製を置く（左右にも上下にも、何度でも分けられます。ほかの枠の大きさは変わりません）。<b>左上の ×</b> でその枠を閉じる。<b>境界の白いつまみ</b>をドラッグすると比率を変えられます（ダブルクリックで半々に戻す）。分割中は、ポインタを置いた（タッチでは触れた）枠の ＋ と × だけが出ます</li>' +
     '<li><b>上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。1つの辺に複数のタイムラインが接するところは、区間ごとに相手を替えてつなぎます。中間混色の方式では、3つ・4つのタイムラインが集まる点も色をなめらかに混ぜます（色相回転の方式では、その点だけ色が切り替わります）。横のスライダーは幅（右端＝枠の中央まで）</li>' +
-    '<li><b>全体の色</b>（分割中だけ）— HDR輝度と知覚明度統一（最低・平均・彩度最大・戻る）を、全部のタイムラインへまとめて適用します。明度の基準は全タイムラインの色点から決めます。分割中は各タイムラインのパネルの色の段を隠します</li>' +
+    '<li><b>全体の色</b>（分割中だけ）— HDR輝度と知覚明度統一（最低・平均・彩度最大・戻る・この色で確定）を、全部のタイムラインへまとめて適用します。明度の基準は全タイムラインの色点から決めます。分割中は各タイムラインのパネルの色の段を隠します</li>' +
     '<li><b>サークルの下のパネル</b> — 秒数・一時停止・回転の逆転、xy色度図・輝度検証、色の設定がまとまっています</li>' +
     '<li><b>⋯</b>（画面や枠が小さいとき）— xy色度図・輝度検証・色の設定を開閉。ごく小さい枠では、リングの下の <b>⏸</b> で一時停止、<b>⋯</b> で秒数・逆転も含めた設定を枠全体に開きます</li>' +
     '</ul>' +

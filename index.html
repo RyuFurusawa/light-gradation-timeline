@@ -55,12 +55,30 @@
   .segGroup button + button { border-left: 1px solid rgba(255,255,255,0.18) !important; }
   canvas.p5Canvas { position: relative; z-index: 1; touch-action: none; }
   @media (pointer: coarse) {
-    .bar { gap: 10px; padding: 10px 12px; max-width: 94vw; }
-    .bar button { padding: 12px 16px; font-size: 15px; border-radius: 11px; }
-    .bar span { font-size: 14px; }
-    .bar input[type=number] { width: 72px; padding: 10px; font-size: 15px; }
+    /* タッチ端末：押しやすさ（高さ 36px 以上）は保ちつつ、文字は控えめに */
+    .bar { gap: 8px; padding: 8px 10px; max-width: 94vw; }
+    .bar button { padding: 8px 12px; font-size: 13px; border-radius: 10px; min-height: 36px; }
+    .bar span { font-size: 12.5px; }
+    .bar input[type=number] { width: 56px; padding: 7px 8px; font-size: 14px; }
     .bar input[type=range] { width: 30vw; min-width: 100px; }
   }
+  /* 一時停止・再生のアイコン（絵文字にならないよう SVG で描く） */
+  .ico { display: inline-block; width: 11px; height: 11px; vertical-align: middle; fill: currentColor; }
+  /* 色選びのパネル（キーストーンをタップ／ダブルクリックすると出る） */
+  #colorPop {
+    position: fixed; z-index: 20; display: none; padding: 10px; border-radius: 14px;
+    background: rgba(24,24,28,0.9); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 10px 34px rgba(0,0,0,0.35);
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; color: #f2f2f2; touch-action: none;
+  }
+  #colorPop.open { display: block; }
+  #colorPop canvas { display: block; border-radius: 8px; cursor: crosshair; touch-action: none; }
+  #colorPop .hue { margin-top: 8px; border-radius: 6px; }
+  #colorPop .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  #colorPop .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.9); flex: 0 0 auto; }
+  #colorPop .hex { font: 12px ui-monospace, Menlo, monospace; color: rgba(255,255,255,0.7); flex: 1 1 auto; }
+  #colorPop button { padding: 6px 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.08); color: #f2f2f2; font-size: 12.5px; cursor: pointer; }
   /* 補間方式スイッチ（サークル上部）とモーダル */
   #modeSwitch {
     position: fixed; left: 50%; transform: translateX(-50%); z-index: 13;
@@ -404,7 +422,7 @@ let dragXYIdx = -1, dragXY_Y = 0;   // xy図上の色点ドラッグ
 let playMode = false, playHintT = 0, wasFs = false;
 
 let renderer = null;        // {kind, draw(rgb)}
-let picker, pickTarget = -1;
+let pickTarget = -1;
 let lumaSnapshot = null;     // 輝度統一前の色スナップショット（元に戻す用）
 let showLumaCheck = false;   // 輝度検証：中央にグレー基準面を表示
 let showXY = false;          // xy色度図の表示
@@ -452,17 +470,6 @@ function setup() {
 
   isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
   ringDims();
-
-  picker = document.createElement('input');
-  picker.type = 'color';
-  picker.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;border:0;padding:0;pointer-events:none;z-index:5;';
-  document.body.appendChild(picker);
-  picker.addEventListener('input', function () {
-    if (pickTarget >= 0 && pickTarget < points.length) {
-      let c2 = hexToRgb(picker.value);
-      points[pickTarget].r = c2[0]; points[pickTarget].g = c2[1]; points[pickTarget].b = c2[2];
-    }
-  });
 
   buildUI();
   initWakeLock();
@@ -1244,7 +1251,10 @@ function drawPlayhead(a) {
   let x1 = cx + cos(a) * (R + L), y1 = cy + sin(a) * (R + L);
   haloOn(5 + 3 * s, 0.9);
   stroke(255); strokeWeight(Math.max(1.5, 2.4 * s)); strokeCap(ROUND); line(x0, y0, x1, y1);
-  noStroke(); fill(255); circle(x1, y1, rd.knob);
+  // つまみは、キーストーンと同じく操作できる枠（カーソルのある枠・タッチで選んだ枠）だけに出す。ほかは線だけ
+  updateKeyVisibility();
+  let ka = dragPlayhead ? 1 : keyA;
+  if (ka > 0) { noStroke(); fill(255, 255 * ka); circle(x1, y1, rd.knob); }
   haloOff();
 }
 // (mx, my) が i 番目のキーストーン（色点）に当たっているか
@@ -1270,8 +1280,7 @@ function updateKeyVisibility() {
   if (Math.abs(dotT - keyA) < 0.01) { keyA = dotT; }
   if (Math.abs(ringT - ringA) < 0.01) { ringA = ringT; }
 }
-function drawPoints() {
-  updateKeyVisibility();
+function drawPoints() {   // 見え方（keyA・ringA）は drawPlayhead で更新済み
   if (keyA <= 0 && dragIdx < 0) { return; }
   for (let i = 0; i < points.length; i++) {
     let p = points[i];
@@ -1315,6 +1324,7 @@ function isCanvasEvent(e) { return !e || !e.target || e.target.tagName === 'CANV
 function mousePressed(e) {
   if (IS_HOST || !isCanvasEvent(e)) { return; }
   if (isCoarse && paneMulti && !paneActive && !playMode) { tapSwallow = true; return; }
+  if (colorPop && colorPop.classList.contains('open')) { closePicker(); tapSwallow = true; return; }
   if (playMode) { exitPlay(); return; }
   pressX = mouseX; pressY = mouseY; movedFar = false;
   dragIdx = -1; dragDelete = false; dragPlayhead = false;
@@ -1369,7 +1379,7 @@ function mouseReleased(e) {
   if (dragPlayhead) { dragPlayhead = false; movedFar = false; return; }
   if (dragXYIdx >= 0) { dragXYIdx = -1; movedFar = false; return; }
   let wasTap = !movedFar;
-  if (dragIdx >= 0 && dragDelete && points.length > 2) { points.splice(dragIdx, 1); wasTap = false; }
+  if (dragIdx >= 0 && dragDelete && points.length > 2) { points.splice(dragIdx, 1); wasTap = false; closePicker(); }
   dragIdx = -1; dragDelete = false;
   if (wasTap && !playMode) { handleTap(mouseX, mouseY); }
 }
@@ -1378,8 +1388,9 @@ function handleTap(x, y) {
   for (let i = 0; i < points.length; i++) {
     let px = cx + cos(points[i].ang) * R, py = cy + sin(points[i].ang) * R;
     if (keyHit(i, x, y)) {
+      // タッチは1回のタップ、マウスはダブルクリックで色選びを開く
       let now = millis();
-      if (now - lastTapT < 400 && dist(x, y, lastTapX, lastTapY) < 40) { lastTapT = -99999; openPickerAt(i, px, py); }
+      if (isCoarse || (now - lastTapT < 400 && dist(x, y, lastTapX, lastTapY) < 40)) { lastTapT = -99999; openPickerAt(i, px, py); }
       else { lastTapT = now; lastTapX = x; lastTapY = y; }
       return;
     }
@@ -1396,19 +1407,108 @@ function touchStarted(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mousePr
 function touchMoved(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseDragged(e); return false; }
 function touchEnded(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseReleased(e); return false; }
 
+/* 色選びのパネル
+   ブラウザ標準の色選び（隠した input type=color をプログラムから開く方式）は iPhone で開かないことがあったので、
+   アプリ内のパネルにした：彩度×明度の面（HSB の S・B）と色相の帯。動かすとすぐキーストーンの色が変わる */
+let colorPop = null, popSV = null, popHue = null, popSw = null, popHex = null, popHSV = [0, 1, 1];
+const POP_W = 176, POP_H = 120, HUE_H = 16;
+function buildColorPop() {
+  colorPop = document.createElement('div');
+  colorPop.id = 'colorPop';
+  popSV = document.createElement('canvas'); popHue = document.createElement('canvas'); popHue.className = 'hue';
+  let dpr = window.devicePixelRatio || 1;
+  [[popSV, POP_W, POP_H], [popHue, POP_W, HUE_H]].forEach(function (c) {
+    c[0].width = Math.round(c[1] * dpr); c[0].height = Math.round(c[2] * dpr);
+    c[0].style.width = c[1] + 'px'; c[0].style.height = c[2] + 'px';
+  });
+  let row = document.createElement('div'); row.className = 'row';
+  popSw = document.createElement('span'); popSw.className = 'sw';
+  popHex = document.createElement('span'); popHex.className = 'hex';
+  let close = document.createElement('button'); close.textContent = '閉じる';
+  close.addEventListener('click', closePicker);
+  row.appendChild(popSw); row.appendChild(popHex); row.appendChild(close);
+  colorPop.appendChild(popSV); colorPop.appendChild(popHue); colorPop.appendChild(row);
+  document.body.appendChild(colorPop);
+  function drag(el, fn) {
+    let on = false;
+    el.addEventListener('pointerdown', function (ev) { on = true; try { el.setPointerCapture(ev.pointerId); } catch (e) {} fn(ev); ev.preventDefault(); });
+    el.addEventListener('pointermove', function (ev) { if (on) { fn(ev); } });
+    el.addEventListener('pointerup', function () { on = false; });
+    el.addEventListener('pointercancel', function () { on = false; });
+  }
+  drag(popSV, function (ev) {
+    let r = popSV.getBoundingClientRect();
+    popHSV[1] = constrain((ev.clientX - r.left) / r.width, 0, 1);
+    popHSV[2] = constrain(1 - (ev.clientY - r.top) / r.height, 0, 1);
+    applyPicker();
+  });
+  drag(popHue, function (ev) {
+    let r = popHue.getBoundingClientRect();
+    popHSV[0] = constrain((ev.clientX - r.left) / r.width, 0, 1) * 359.9;
+    applyPicker();
+  });
+  // パネルの外での操作がキャンバスへ漏れないように
+  colorPop.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+}
+function drawPicker() {
+  let dpr = window.devicePixelRatio || 1;
+  let g = popSV.getContext('2d'), W = popSV.width, H = popSV.height;
+  let hc = hsv2rgb(popHSV[0], 1, 1);
+  let gx = g.createLinearGradient(0, 0, W, 0);
+  gx.addColorStop(0, '#fff'); gx.addColorStop(1, 'rgb(' + hc.map(Math.round).join(',') + ')');
+  g.fillStyle = gx; g.fillRect(0, 0, W, H);
+  let gy = g.createLinearGradient(0, 0, 0, H);
+  gy.addColorStop(0, 'rgba(0,0,0,0)'); gy.addColorStop(1, '#000');
+  g.fillStyle = gy; g.fillRect(0, 0, W, H);
+  let mx = popHSV[1] * W, my = (1 - popHSV[2]) * H;
+  g.lineWidth = 2 * dpr; g.strokeStyle = '#fff'; g.beginPath(); g.arc(mx, my, 6 * dpr, 0, Math.PI * 2); g.stroke();
+  let h = popHue.getContext('2d'), HW = popHue.width, HH = popHue.height;
+  let gh = h.createLinearGradient(0, 0, HW, 0);
+  for (let k = 0; k <= 6; k++) { gh.addColorStop(k / 6, 'rgb(' + hsv2rgb(k * 60, 1, 1).map(Math.round).join(',') + ')'); }
+  h.fillStyle = gh; h.fillRect(0, 0, HW, HH);
+  let hx = popHSV[0] / 360 * HW;
+  h.lineWidth = 2 * dpr; h.strokeStyle = '#fff'; h.strokeRect(hx - 3 * dpr, 1 * dpr, 6 * dpr, HH - 2 * dpr);
+}
+function applyPicker() {
+  if (pickTarget < 0 || pickTarget >= points.length) { closePicker(); return; }
+  let c = hsv2rgb(popHSV[0], popHSV[1], popHSV[2]).map(function (v) { return Math.round(constrain(v, 0, 255)); });
+  points[pickTarget].r = c[0]; points[pickTarget].g = c[1]; points[pickTarget].b = c[2];
+  popSw.style.background = 'rgb(' + c.join(',') + ')';
+  popHex.textContent = '#' + hex2(c[0]) + hex2(c[1]) + hex2(c[2]);
+  drawPicker();
+}
 function openPickerAt(i, x, y) {
+  if (!colorPop) { buildColorPop(); }
   pickTarget = i;
-  let p = points[i];
-  picker.style.left = x + 'px'; picker.style.top = y + 'px';
-  picker.value = '#' + hex2(p.r) + hex2(p.g) + hex2(p.b);
-  picker.click();
+  let p = points[i], hsv = rgb2hsv(p.r, p.g, p.b);
+  // 無彩色のときは色相が決まらないので、前の色相を引き継ぐ
+  popHSV = [hsv[1] < 1e-4 ? popHSV[0] : hsv[0], hsv[1], hsv[2]];
+  colorPop.classList.add('open');
+  // キーストーンの横（リングの外へ向かう側、入らなければ反対側）に出す。横に入らなければ上か下（リングの中心側）に出す。
+  // どの場合もキーストーン自身には被せない
+  let pw = colorPop.offsetWidth, ph = colorPop.offsetHeight, gap = rd.point + 14;
+  let right = x + gap, left = x - gap - pw, ox, oy = y - ph / 2;
+  let fitR = right + pw <= width - 8, fitL = left >= 8;
+  if ((x >= cx && fitR) || (x < cx && !fitL && fitR)) { ox = right; }
+  else if (fitL) { ox = left; }
+  else {
+    ox = x - pw / 2;
+    oy = (y < cy) ? y + gap : y - gap - ph;   // 上半分のキーストーンなら下へ、下半分なら上へ
+  }
+  colorPop.style.left = Math.round(constrain(ox, 8, Math.max(8, width - pw - 8))) + 'px';
+  colorPop.style.top = Math.round(constrain(oy, 8, Math.max(8, height - ph - 8))) + 'px';
+  applyPicker();
+}
+function closePicker() {
+  if (colorPop) { colorPop.classList.remove('open'); }
+  pickTarget = -1;
 }
 
 function keyPressed() {
   if (IS_HOST) { return; }
   if (key === 'f' || key === 'F') { enterPlay(); }
   if (key === ' ') { togglePause(); }
-  if (keyCode === ESCAPE) { exitPlay(); if (infoPanel) { infoPanel.style.display = 'none'; } }
+  if (keyCode === ESCAPE) { exitPlay(); closePicker(); if (infoPanel) { infoPanel.style.display = 'none'; } }
 }
 
 // フルスクリーンは親ページが画面全体で行い、全ペインのUIを同時に消す。
@@ -1432,6 +1532,7 @@ function applyPlay(on) {
   document.body.classList.toggle('play', on);
   if (on) {
     playMode = true;
+    closePicker();
     document.body.classList.remove('moreOpen');
     syncSheet();
     topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
@@ -1939,14 +2040,16 @@ function hostSetPlay(on, fsDone) {
   } catch (err) {}
 }
 
+const ICON_PAUSE = '<svg class="ico" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="1.5" width="2.8" height="9" rx="0.8"/><rect x="7.2" y="1.5" width="2.8" height="9" rx="0.8"/></svg>';
+const ICON_PLAY = '<svg class="ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.6v8.8c0 .5.5.8.9.5l6.6-4.4a.6.6 0 0 0 0-1L3.9 1.1c-.4-.3-.9 0-.9.5z"/></svg>';
 function togglePause() {
   if (!paused) { pausedAt = millis(); paused = true; }
   else { t0 += millis() - pausedAt; paused = false; }
   syncPauseIcon();
 }
 function syncPauseIcon() {
-  pauseBtn.html(paused ? '▶' : '⏸');
-  if (miniPause) { miniPause.textContent = paused ? '▶' : '⏸'; }
+  pauseBtn.html(paused ? ICON_PLAY : ICON_PAUSE);
+  if (miniPause) { miniPause.innerHTML = paused ? ICON_PLAY : ICON_PAUSE; }
 }
 // ごく小さい枠で ⋯ を開いているあいだは、操作パネルをシートの中へ移す。閉じたら戻す
 function syncSheet() {
@@ -2429,7 +2532,7 @@ function buildUI() {
   createSpan('秒').parent(timeBar);
   durSlider = createSlider(0.5, 120, loopDur, 0.5); durSlider.parent(timeBar);
   durSlider.input(function () { setDur(durSlider.value()); });
-  pauseBtn = createButton('⏸'); pauseBtn.parent(timeBar);
+  pauseBtn = createButton(ICON_PAUSE); pauseBtn.parent(timeBar);
   pauseBtn.mousePressed(togglePause);
   pauseBtn.attribute('title', '一時停止／再開');
   revBtn = createButton('\u21bb'); revBtn.parent(timeBar);
@@ -2520,7 +2623,7 @@ function buildUI() {
   // ---- ごく小さい枠：一時停止の丸ボタンと、設定のシート ----
   miniPause = document.createElement('button');
   miniPause.id = 'miniPause';
-  miniPause.textContent = '\u23f8';
+  miniPause.innerHTML = ICON_PAUSE;
   miniPause.title = '一時停止／再開'; miniPause.setAttribute('aria-label', '一時停止／再開');
   document.body.appendChild(miniPause);
   miniPause.addEventListener('click', function () { miniPause.blur(); togglePause(); });
@@ -2591,7 +2694,7 @@ function buildInfoUI(parentEl) {
     '<li><b>色点の表示</b> — マウスでは、カーソルを画面に入れると色点が現れ、サークルに近づけると白い輪が付きます。iPhone・iPad では常に表示（分割中は、最後に触れたタイムラインだけ）</li>' +
     '<li><b>色点をドラッグ</b> — タイミング（円周上の位置）を変える</li>' +
     '<li><b>色点を円の外へドラッグ</b> — 削除（最低2点は残ります）</li>' +
-    '<li><b>色点を2回タップ／ダブルクリック</b> — カラーピッカーで色を変更</li>' +
+    '<li><b>色点をタップ（マウスはダブルクリック）</b> — 色選びのパネルで色を変更（面で彩度と明るさ、帯で色相）</li>' +
     '<li><b>リングの帯をタップ</b> — その位置に色点を追加</li>' +
     '<li><b>白い針（再生ヘッド）をドラッグ</b> — 再生位置を動かす</li>' +
     '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ　<b>↻ボタン</b> — 回転の向きを逆にする（針の位置はそのまま）</li>' +

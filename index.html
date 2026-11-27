@@ -842,6 +842,7 @@ function hex2(n) { let s = Math.round(constrain(n, 0, 255)).toString(16); return
    隣の色は送ってもらわず、隣のタイムラインの設定（色点・秒数・位相の起点・一時停止・向き・ゲイン）から、
    自分の描画と同じコマの時刻で計算する。補間方式は全枠共通 */
 let lastSpecSent = '', diagSpec = { TL: null, TR: null, BL: null, BR: null };
+let tjs = { L: [], R: [], T: [], B: [] };   // T字の交点（親から）：辺ごとに [位置, 手前の隣の長さ, 奥の隣の長さ]
 function mySpec() {
   return {
     pts: points.map(function (q) { return [q.ang, q.r, q.g, q.b]; }),
@@ -958,6 +959,20 @@ function edgeLuts(rgb) {
       t.corners[c] = cornerLut(me, hs.c, vs.c, diag[c], outGain());
     });
   }
+  // T字の交点（この枠の辺に2つの隣が接する所）。交点の左右それぞれに、4枠の角と同じ面を張る：
+  // 自分 P、左右方向の相手 H＝自分自身（交点の向こうも自分）、辺の向こう V＝手前の隣、対角 D＝奥の隣
+  t.tj = { L: [], R: [], T: [], B: [] };
+  if (any && LIN_SPACES[mode]) {
+    let me = { r: rgb[0], g: rgb[1], b: rgb[2] }, meG = { r: rgb[0], g: rgb[1], b: rgb[2], gain: outGain() };
+    EDGE_SIDES.forEach(function (k) {
+      (tjs[k] || []).slice(0, EDGE_MAXS - 1).forEach(function (j, i) {
+        let a = nb[k][i], b = nb[k][i + 1];
+        if (!a || !b || !a.c || !b.c) { return; }
+        t.tj[k].push({ pos: +j[0], wp: +j[1], wn: +j[2],
+          lutL: cornerLut(me, meG, a.c, b.c, outGain()), lutR: cornerLut(me, meG, b.c, a.c, outGain()) });
+      });
+    });
+  }
   return any ? t : null;
 }
 // 帯の中の位置 k（0＝境界、1＝帯の外）のなだらかな終わり方。f(k) = 2k − k²
@@ -982,9 +997,18 @@ function edgeColorAt(x, y, self, luts, W, H) {
     let p = k * EDGE_N, i0 = Math.min(Math.floor(p), EDGE_N - 1), f = p - i0, a = i0 * 4, b = a + 4;
     return [t[a] + (t[b] - t[a]) * f, t[a+1] + (t[b+1] - t[a+1]) * f, t[a+2] + (t[b+2] - t[a+2]) * f];
   }
-  // 辺の区間を重みで混ぜた色。区間がなければ null
-  function side(list, k, pos, h) {
+  // 辺の区間を重みで混ぜた色。区間がなければ null。
+  // T字の交点の近く（隣の枠の帯の幅の内側）では、その交点の面を使う。交点がある辺は区間をぼかさない（面がつなぐ）
+  function side(list, k, pos, h, tjl) {
     if (!list || list.length === 0) { return null; }
+    if (tjl && tjl.length) {
+      for (let j = 0; j < tjl.length; j++) {
+        let t = tjl[j], d = pos - t.pos;
+        let kk = edgeEase(constrain(Math.abs(d) * 2 / (blendWidth * (d <= 0 ? t.wp : t.wn)), 0, 1));
+        if (kk < 1) { return cornerAt(d <= 0 ? t.lutL : t.lutR, kk, k); }
+      }
+      h = 1e-6;
+    }
     let acc = [0, 0, 0], ws = 0;
     for (let i = 0; i < list.length; i++) {
       let w = edgeSegW(pos, list[i].a0, list[i].a1, h);
@@ -995,8 +1019,9 @@ function edgeColorAt(x, y, self, luts, W, H) {
   let ex = Math.min(x, 1 - x), ey = Math.min(y, 1 - y);
   let kx = edgeEase(constrain(ex * 2 / blendWidth, 0, 1)), ky = edgeEase(constrain(ey * 2 / blendWidth, 0, 1));
   // ぼかしの半幅：境界からの距離（画素）を、辺に沿った長さで割る
-  let ch = side(x > 0.5 ? luts.R : luts.L, kx, y, Math.max(ex * W / H, 1e-6));
-  let cv = side(y > 0.5 ? luts.B : luts.T, ky, x, Math.max(ey * H / W, 1e-6));
+  let tj = luts.tj || {};
+  let ch = side(x > 0.5 ? luts.R : luts.L, kx, y, Math.max(ex * W / H, 1e-6), x > 0.5 ? tj.R : tj.L);
+  let cv = side(y > 0.5 ? luts.B : luts.T, ky, x, Math.max(ey * H / W, 1e-6), y > 0.5 ? tj.B : tj.T);
   if (!ch && !cv) { return self; }
   let w = (ch && cv) ? edgeWeights(kx, ky) : [1, 1];
   let out = [self[0], self[1], self[2]];
@@ -1121,8 +1146,10 @@ function makeWebGPURenderer(device, ctx, format) {
     '  en : vec4<f32>,\n' +       // 各辺の区間の数（x左 y右 z上 w下）
     '  lself : vec4<f32>,\n' +    // 自分の光（線形×ゲイン）
     '  cflag : vec4<f32>,\n' +    // 4枠が集まる角の面の有無（x左上 y右上 z左下 w右下）
+    '  tcnt : vec4<f32>,\n' +     // 各辺の T字の交点の数（x左 y右 z上 w下）
     '  seg : array<vec4<f32>, ' + (4 * EDGE_MAXS) + '>,\n' +   // 区間 xy＝a0, a1（辺に沿った 0..1）。辺ごとに EDGE_MAXS 個
     '  lut : array<vec4<f32>, ' + (4 * EDGE_MAXS * (EDGE_N + 1)) + '>,\n' +   // 区間ごとの、境界→帯の終わりの色の表（線形×ゲイン）
+    '  tj : array<vec4<f32>, ' + (4 * (EDGE_MAXS - 1)) + '>,\n' +   // T字の交点 x＝位置, y＝手前の隣の長さ, z＝奥の隣の長さ（0 なら面なし）
     '};\n' +
     '@group(0) @binding(0) var<uniform> u : U;\n' +
     '@group(0) @binding(1) var<storage, read> cl : array<vec4<f32>>;\n' +   // 4枠が集まる角の面の表（角ごとに EDGE_CN×EDGE_CN）
@@ -1147,7 +1174,22 @@ function makeWebGPURenderer(device, ctx, format) {
     '  return mix(top, bot, fy);\n' +
     '}\n' +
     // 辺 s の区間を重みで混ぜた色（rgb）と重みの和（a）。JS側の edgeColorAt 内の side() と同じ
-    'fn sideCol(s : u32, n : u32, k : f32, pos : f32, h : f32) -> vec4<f32> {\n' +
+    'fn sideCol(s : u32, n : u32, k : f32, pos : f32, h0 : f32) -> vec4<f32> {\n' +
+    '  var h = h0;\n' +
+    '  let nt = u32(u.tcnt[s]);\n' +   // T字の交点の近くでは、その交点の面を使う（JS側の side() と同じ）
+    '  for (var j = 0u; j < ' + (EDGE_MAXS - 1) + 'u; j = j + 1u) {\n' +
+    '    if (j >= nt) { break; }\n' +
+    '    let t = u.tj[s * ' + (EDGE_MAXS - 1) + 'u + j];\n' +
+    '    let d = pos - t.x;\n' +
+    '    var w = t.z; var q = 1u;\n' +
+    '    if (d <= 0.0) { w = t.y; q = 0u; }\n' +
+    '    if (w > 0.0) {\n' +
+    '      let k0 = clamp(abs(d) * 2.0 / (u.flags.w * w), 0.0, 1.0);\n' +
+    '      let kk = k0 * (2.0 - k0);\n' +
+    '      if (kk < 1.0) { return vec4<f32>(cornerAt(4u + (s * ' + (EDGE_MAXS - 1) + 'u + j) * 2u + q, kk, k), 1.0); }\n' +
+    '    }\n' +
+    '  }\n' +
+    '  if (nt > 0u) { h = 0.000001; }\n' +
     '  var acc = vec3<f32>(0.0); var ws = 0.0;\n' +
     '  for (var i = 0u; i < ' + EDGE_MAXS + 'u; i = i + 1u) {\n' +
     '    if (i >= n) { break; }\n' +
@@ -1208,10 +1250,12 @@ function makeWebGPURenderer(device, ctx, format) {
     '  return u.bg;\n' +
     '}\n'
   });
-  const UB_SEG = 32, UB_LUT = UB_SEG + 4 * EDGE_MAXS * 4;
-  const CL_FLOATS = 4 * EDGE_CN * EDGE_CN * 4;
+  const UB_SEG = 36, UB_LUT = UB_SEG + 4 * EDGE_MAXS * 4, UB_TJ = UB_LUT + 4 * EDGE_MAXS * (EDGE_N + 1) * 4;
+  // 面の表：4つの角 ＋ T字の交点（辺ごとに EDGE_MAXS−1 個 × 左右の2面）
+  const CL_COUNT = 4 + 4 * (EDGE_MAXS - 1) * 2, CL_ONE = EDGE_CN * EDGE_CN * 4;
+  const CL_FLOATS = CL_COUNT * CL_ONE;
   const cornerBuf = device.createBuffer({ size: CL_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const UB_FLOATS = UB_LUT + 4 * EDGE_MAXS * (EDGE_N + 1) * 4;
+  const UB_FLOATS = UB_TJ + 4 * (EDGE_MAXS - 1) * 4;
   const uniformBuf = device.createBuffer({ size: UB_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const bgl = device.createBindGroupLayout({ entries: [
     { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
@@ -1260,8 +1304,19 @@ function makeWebGPURenderer(device, ctx, format) {
         Math.max(1, gpu.width), Math.max(1, gpu.height), 0.0, 0.0,
         luts ? luts.L.length : 0, luts ? luts.R.length : 0, luts ? luts.T.length : 0, luts ? luts.B.length : 0,
         lr * hdrGain, lg * hdrGain, lb * hdrGain, 1.0,
-        (luts && luts.corners.TL) ? 1 : 0, (luts && luts.corners.TR) ? 1 : 0, (luts && luts.corners.BL) ? 1 : 0, (luts && luts.corners.BR) ? 1 : 0
+        (luts && luts.corners.TL) ? 1 : 0, (luts && luts.corners.TR) ? 1 : 0, (luts && luts.corners.BL) ? 1 : 0, (luts && luts.corners.BR) ? 1 : 0,
+        luts ? luts.tj.L.length : 0, luts ? luts.tj.R.length : 0, luts ? luts.tj.T.length : 0, luts ? luts.tj.B.length : 0
       ], 0);
+      if (luts) {
+        EDGE_SIDES.forEach(function (k, si) {
+          luts.tj[k].forEach(function (t, j) {
+            let id = si * (EDGE_MAXS - 1) + j;
+            data.set([t.pos, t.wp, t.wn, 0], UB_TJ + id * 4);
+            device.queue.writeBuffer(cornerBuf, (4 + id * 2) * CL_ONE * 4, t.lutL);
+            device.queue.writeBuffer(cornerBuf, (4 + id * 2 + 1) * CL_ONE * 4, t.lutR);
+          });
+        });
+      }
       if (luts) {
         EDGE_CORNERS.forEach(function (c, ci) {
           if (luts.corners[c]) { device.queue.writeBuffer(cornerBuf, ci * EDGE_CN * EDGE_CN * 16, luts.corners[c]); }
@@ -1723,6 +1778,7 @@ function initPaneMessaging() {
         cornerOn[c] = !!(blendOn && d.corners && d.corners[c]);
         if (!cornerOn[c]) { diag[c] = null; diagSpec[c] = null; }
       });
+      tjs = (blendOn && d.tj) ? d.tj : { L: [], R: [], T: [], B: [] };
       lastSpecSent = '';   // 隣の顔ぶれが変わったかもしれないので、自分の設定を送り直す
     }
     else if (d.type === 'nbd' && d.spec && diagSpec.hasOwnProperty(d.corner)) {
@@ -2006,20 +2062,40 @@ function hostLayoutPanes() {
       if (q.nb[k].length > EDGE_MAXS) { q.nb[k] = []; }
     });
   });
-  // 4枠が集まる角：左右の隣と上下の隣の両方が、ちょうどその角で終わっていれば4枠。対角の枠を覚える
+  // 角の対角の枠を覚える（中間混色で角の面を張るため）。
+  //  ・4枠の角：左右の隣と上下の隣の両方がちょうどその角で終わる → 対角の枠
+  //  ・T字の交点：片方の隣はその角で終わり、もう片方はその先へ続く → 続いている枠を対角の枠とみなす
+  //    （3枠の点は「対角が続いている枠そのもの」の4枠の角と同じ式で、なめらかにつながる）
   hostPanes.forEach(function (p) {
     let a = p.rect, R = a.x + a.w, Bm = a.y + a.h;
-    function rr(m) { return m && m.pane.rect; }
     function find(f) { return hostPanes.filter(function (q) { return q !== p && f(q.rect); })[0] || null; }
+    function corner(h, v, hEnd, vEnd, f) {
+      if (!h || !v) { return null; }
+      if (hEnd && vEnd) { return find(f); }
+      if (hEnd) { return v.pane; }
+      if (vEnd) { return h.pane; }
+      return null;
+    }
     let L = p.nb.L, Rt = p.nb.R, T = p.nb.T, B = p.nb.B;
-    let hTL = rr(L[0]), vTL = rr(T[0]), hTR = rr(Rt[0]), vTR = rr(T[T.length - 1]);
-    let hBL = rr(L[L.length - 1]), vBL = rr(B[0]), hBR = rr(Rt[Rt.length - 1]), vBR = rr(B[B.length - 1]);
+    let hTL = L[0], vTL = T[0], hTR = Rt[0], vTR = T[T.length - 1];
+    let hBL = L[L.length - 1], vBL = B[0], hBR = Rt[Rt.length - 1], vBR = B[B.length - 1];
+    function r(m) { return m.pane.rect; }
     p.diag = {
-      TL: (hTL && vTL && hTL.y === a.y && vTL.x === a.x) ? find(function (r) { return r.x + r.w === a.x && r.y + r.h === a.y; }) : null,
-      TR: (hTR && vTR && hTR.y === a.y && vTR.x + vTR.w === R) ? find(function (r) { return r.x === R && r.y + r.h === a.y; }) : null,
-      BL: (hBL && vBL && hBL.y + hBL.h === Bm && vBL.x === a.x) ? find(function (r) { return r.x + r.w === a.x && r.y === Bm; }) : null,
-      BR: (hBR && vBR && hBR.y + hBR.h === Bm && vBR.x + vBR.w === R) ? find(function (r) { return r.x === R && r.y === Bm; }) : null
+      TL: corner(hTL, vTL, hTL && r(hTL).y === a.y, vTL && r(vTL).x === a.x, function (q) { return q.x + q.w === a.x && q.y + q.h === a.y; }),
+      TR: corner(hTR, vTR, hTR && r(hTR).y === a.y, vTR && r(vTR).x + r(vTR).w === R, function (q) { return q.x === R && q.y + q.h === a.y; }),
+      BL: corner(hBL, vBL, hBL && r(hBL).y + r(hBL).h === Bm, vBL && r(vBL).x === a.x, function (q) { return q.x + q.w === a.x && q.y === Bm; }),
+      BR: corner(hBR, vBR, hBR && r(hBR).y + r(hBR).h === Bm, vBR && r(vBR).x + r(vBR).w === R, function (q) { return q.x === R && q.y === Bm; })
     };
+    // T字の交点（この枠の1つの辺に、2つ以上の隣が接している所の境目）。
+    // [辺に沿った位置, 手前の隣の辺に沿った長さ, 奥の隣の長さ]（どれもこの枠の辺の長さで割った値）
+    p.tj = {};
+    ['L', 'R', 'T', 'B'].forEach(function (k) {
+      let list = p.nb[k], along = (k === 'T' || k === 'B') ? 'w' : 'h', len = a[along];
+      p.tj[k] = [];
+      for (let i = 0; i + 1 < list.length; i++) {
+        p.tj[k].push([list[i].a1, list[i].pane.rect[along] / len, list[i + 1].pane.rect[along] / len]);
+      }
+    });
   });
   // 上端が共通バーにかかる枠は、中身と×を下げる（バーの下端＋8px から時間バーが始まるように）
   // 横方向にもバーと重なる枠だけ（左右の端の細い枠はバーの下にないので下げない）
@@ -2104,7 +2180,8 @@ function hostSendConfig(q) {
         L: q.nb.L.map(function (m) { return [m.a0, m.a1]; }), R: q.nb.R.map(function (m) { return [m.a0, m.a1]; }),
         T: q.nb.T.map(function (m) { return [m.a0, m.a1]; }), B: q.nb.B.map(function (m) { return [m.a0, m.a1]; })
       },
-      corners: { TL: !!q.diag.TL, TR: !!q.diag.TR, BL: !!q.diag.BL, BR: !!q.diag.BR } }, '*');
+      corners: { TL: !!q.diag.TL, TR: !!q.diag.TR, BL: !!q.diag.BL, BR: !!q.diag.BR },
+      tj: q.tj }, '*');
   } catch (err) {}
 }
 

@@ -348,6 +348,29 @@ let hdrGain = 1.6;          // HDR時の輝度倍率（SDR白=1.0を超える持
 let t0 = 0, paused = false, pausedAt = 0;
 
 let cx, cy, R, hitR = 24, isCoarse = false;
+/* リングまわりの寸法（ここを変えれば見た目を調整できる）
+   それぞれ [リング半径 R に掛ける係数, 最小, 最大]（px）。大きい画面では最大で頭打ち、小さい枠では R に比例して細く小さくなる */
+const RING_STYLE = {
+  band:      [0.07,  5, 18],   // 帯（色の帯）の太さ
+  point:     [0.075, 6, 13],   // 色点の半径
+  pointTouch: 4,               // タッチ端末で色点の半径に足す量（最大も同じだけ上がる）
+  tick:      [0.06,  5, 12],   // 針が帯の外側へはみ出す長さ
+  knob:      [0.045, 6, 11],   // 針先のつまみの直径
+  hit:       [0.10, 14, 24],   // 色点・つまみの当たり判定の半径（マウス）
+  hitTouch:  [0.15, 22, 36]    // 同（タッチ）
+};
+let rd = { band: 18, point: 13, tick: 12, knob: 11, hit: 24 };   // 今の R で計算した寸法（ringDims() が更新）
+function ringDims() {
+  function f(a, add) { return Math.max(a[1], Math.min(a[2] + (add || 0), R * a[0] + (add || 0))); }
+  let t = isCoarse ? RING_STYLE.pointTouch : 0;
+  rd = {
+    band: f(RING_STYLE.band), point: f(RING_STYLE.point, t), tick: f(RING_STYLE.tick),
+    knob: f(RING_STYLE.knob), hit: f(isCoarse ? RING_STYLE.hitTouch : RING_STYLE.hit)
+  };
+  hitR = rd.hit;
+}
+// 中心から針先のつまみの外側までの距離（配置の余白の計算に使う）
+function ringReach() { return R + rd.band / 2 + rd.tick + rd.knob / 2; }
 let dragIdx = -1, dragDelete = false, pressX = 0, pressY = 0, movedFar = false;
 let lastTapT = -99999, lastTapX = 0, lastTapY = 0;
 let dragPlayhead = false;
@@ -402,7 +425,7 @@ function setup() {
   points.push({ ang: -HALF_PI + TWO_PI * 2/3, r: 0,   g: 0,   b: 255 });
 
   isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-  if (isCoarse) { hitR = 36; }
+  ringDims();
 
   picker = document.createElement('input');
   picker.type = 'color';
@@ -462,9 +485,11 @@ function layout() {
   document.body.classList.toggle('mini', mini);
   syncSheet();
   if (mini) {
-    // 上端は＋タブと針のノブ、下端は＋タブ・⏸⋯の列・ノブのぶん空けて、収まる最大のリング。左右も＋タブを避ける
-    let A = topInset + 26 + 26, B = height - 98;
-    R = Math.max(14, Math.min(width / 2 - 32, (B - A) / 2));
+    // 上端は＋タブと針のつまみ、下端は＋タブ・⏸⋯の列・つまみのぶん空けて、収まる最大のリング。左右も＋タブを避ける。
+    // つまみまでの長さは R で変わるので、小さい枠の寸法（最小値）で見積もる
+    let m = RING_STYLE.band[1] / 2 + RING_STYLE.tick[1] + RING_STYLE.knob[1] / 2 + 2;
+    let A = topInset + 26 + m, B = height - 26 - 38 - 8 - m;
+    R = Math.max(14, Math.min(width / 2 - 22 - m, (B - A) / 2));
     cy = (A + B) / 2;
   } else if (isCompact()) {
     // 時間バーの下から「⋯」の上までに、針のノブ（R+26）ごと収まる最大のリングを置く。
@@ -479,6 +504,7 @@ function layout() {
   } else {
     R = min(width, height) * 0.30;
   }
+  ringDims();
   placeBars();
 }
 
@@ -495,7 +521,7 @@ function placeBars() {
   // ごく小さい枠：リングの下に ⏸ と ⋯ を並べる（バーはシートの中か、隠れている）
   if (document.body.classList.contains('mini')) {
     // シートを開いているあいだは、列を枠の下端へ寄せる（シートの中身と重ならないように）
-    let ry = document.body.classList.contains('moreOpen') ? height - 38 - 10 : Math.round(Math.min(cy + R + 30, height - 26 - 38));
+    let ry = document.body.classList.contains('moreOpen') ? height - 38 - 10 : Math.round(Math.min(ringReach() + cy + 6, height - 26 - 38));
     if (moreBtn) { moreBtn.style.top = ry + 'px'; moreBtn.style.left = Math.round(cx + 23) + 'px'; }
     if (miniPause) { miniPause.style.top = ry + 'px'; miniPause.style.left = Math.round(cx - 23) + 'px'; }
     return;
@@ -1224,8 +1250,8 @@ function makeWebGPURenderer(device, ctx, format) {
 }
 
 function drawRing(sorted) {
-  noFill(); stroke(0, 90); strokeWeight(36); circle(cx, cy, R * 2);
-  let steps = 360; strokeWeight(26); strokeCap(ROUND);
+  noFill(); stroke(0, 90); strokeWeight(rd.band + Math.max(4, rd.band * 0.4)); circle(cx, cy, R * 2);
+  let steps = 360; strokeWeight(rd.band); strokeCap(ROUND);
   for (let k = 0; k < steps; k++) {
     let a0 = k / steps * TWO_PI, a1 = (k + 1.35) / steps * TWO_PI;
     let c = sampleAt(a0 + 0.0001, sorted);
@@ -1234,30 +1260,33 @@ function drawRing(sorted) {
   }
 }
 function drawPlayhead(a) {
-  let x0 = cx + cos(a) * (R - 26), y0 = cy + sin(a) * (R - 26);
-  let x1 = cx + cos(a) * (R + 26), y1 = cy + sin(a) * (R + 26);
-  stroke(0, 150); strokeWeight(6); line(x0, y0, x1, y1);
-  stroke(255); strokeWeight(2.5); line(x0, y0, x1, y1);
-  noStroke(); fill(255); circle(x1, y1, 11);
-  stroke(0, 150); strokeWeight(1.5); noFill(); circle(x1, y1, 11);
+  let L = rd.band / 2 + rd.tick, s = rd.knob / 11;   // 線の太さはつまみの大きさに合わせて細くする
+  let x0 = cx + cos(a) * (R - L), y0 = cy + sin(a) * (R - L);
+  let x1 = cx + cos(a) * (R + L), y1 = cy + sin(a) * (R + L);
+  stroke(0, 150); strokeWeight(Math.max(3, 6 * s)); line(x0, y0, x1, y1);
+  stroke(255); strokeWeight(Math.max(1.5, 2.5 * s)); line(x0, y0, x1, y1);
+  noStroke(); fill(255); circle(x1, y1, rd.knob);
+  stroke(0, 150); strokeWeight(Math.max(1, 1.5 * s)); noFill(); circle(x1, y1, rd.knob);
 }
 function drawPoints() {
+  let s = rd.point / 14;   // 縁取りの太さも色点の大きさに合わせる
   for (let i = 0; i < points.length; i++) {
     let p = points[i];
     let x = cx + cos(p.ang) * R, y = cy + sin(p.ang) * R;
     let hovered = dist(mouseX, mouseY, x, y) < hitR;
     let dragging = (i === dragIdx);
-    let base = isCoarse ? 19 : 14;
-    let rr = (dragging || hovered) ? base + 3 : base;
+    let base = rd.point;
+    let rr = (dragging || hovered) ? base + Math.max(2, 3 * s) : base;
     if (dragging && dragDelete) {
-      stroke(0, 160); strokeWeight(7); noFill(); circle(x, y, rr * 2 + 4);
-      stroke(255, 70, 70); strokeWeight(4); fill(p.r, p.g, p.b, 120); circle(x, y, rr * 2);
-      stroke(255); strokeWeight(3);
-      line(x - 7, y - 7, x + 7, y + 7); line(x - 7, y + 7, x + 7, y - 7);
+      stroke(0, 160); strokeWeight(Math.max(3, 7 * s)); noFill(); circle(x, y, rr * 2 + 4);
+      stroke(255, 70, 70); strokeWeight(Math.max(2, 4 * s)); fill(p.r, p.g, p.b, 120); circle(x, y, rr * 2);
+      let q = rr * 0.5;
+      stroke(255); strokeWeight(Math.max(1.5, 3 * s));
+      line(x - q, y - q, x + q, y + q); line(x - q, y + q, x + q, y - q);
       drawOutlinedText('離すと削除', x, y - rr - 16, 13, 255);
     } else {
-      stroke(0, 160); strokeWeight(6); noFill(); circle(x, y, rr * 2 + 3);
-      stroke(255); strokeWeight(3); fill(p.r, p.g, p.b); circle(x, y, rr * 2);
+      stroke(0, 160); strokeWeight(Math.max(3, 6 * s)); noFill(); circle(x, y, rr * 2 + 3 * s);
+      stroke(255); strokeWeight(Math.max(1.5, 3 * s)); fill(p.r, p.g, p.b); circle(x, y, rr * 2);
     }
   }
 }
@@ -1277,7 +1306,7 @@ function mousePressed(e) {
   dragIdx = -1; dragDelete = false; dragPlayhead = false;
   // 再生ヘッド（針先のノブ）のドラッグ判定は色点より優先
   let pha = getPhase() * TWO_PI - HALF_PI;
-  let phx = cx + cos(pha) * (R + 26), phy = cy + sin(pha) * (R + 26);
+  let phx = cx + cos(pha) * (R + rd.band / 2 + rd.tick), phy = cy + sin(pha) * (R + rd.band / 2 + rd.tick);
   if (dist(mouseX, mouseY, phx, phy) < hitR) { dragPlayhead = true; return; }
   // xy色度図の色点ドラッグ（xy図のみ表示のとき）
   dragXYIdx = -1;
@@ -1319,7 +1348,7 @@ function mouseDragged(e) {
   if (dist(mouseX, mouseY, pressX, pressY) > 7) { movedFar = true; }
   if (dragIdx < 0 || !movedFar) { return; }
   points[dragIdx].ang = atan2(mouseY - cy, mouseX - cx);
-  dragDelete = dist(mouseX, mouseY, cx, cy) > R * 1.35;
+  dragDelete = dist(mouseX, mouseY, cx, cy) > Math.max(R * 1.35, R + rd.band / 2 + 30);   // 小さいリングでも外へ十分に出したら削除
 }
 function mouseReleased(e) {
   if (IS_HOST) { return; }
@@ -1342,7 +1371,7 @@ function handleTap(x, y) {
     }
   }
   let d = dist(x, y, cx, cy);
-  if (abs(d - R) < hitR + 8) {
+  if (abs(d - R) < rd.band / 2 + rd.hit * 0.5 + 4) {   // 帯の上（とその少し外）をタップしたら追加
     let ang = atan2(y - cy, x - cx);
     let c = sampleAt(ang, sortPoints());
     points.push({ ang: ang, r: c[0], g: c[1], b: c[2] });

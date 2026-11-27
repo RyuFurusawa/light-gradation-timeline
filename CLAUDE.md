@@ -36,6 +36,8 @@ CLAUDE.md           このファイル
 - 単一HTML、ビルドなし、**外部ライブラリなし**（2026-11-27 に p5.js をやめた。理由：色の忠実さは WebGPU／CSS の出力で決まり p5 は関わっていなかった、CDN に届かない教室でも動く、軽い）。描画は Canvas 2D、部品は DOM（`el()` で作る）、入力は Pointer Events（マウスとタッチを同じに扱う、`bindInput()`）、描画の繰り返しは `requestAnimationFrame`。`constrain`・`lerp`・`dist`・`TWO_PI` などの小さな数学関数は冒頭で自前で定義。起動はスクリプトの最後の `setup()`
 - **描画の分担**：全画面の色（背景＋中央の基準グレー矩形）は生の WebGPU か CSS、リング・色点・xy色度図は Canvas 2D の `canvas.ringCanvas`（`cnv`・`ctx`、透明、z-index で WebGPU canvas の上に重ねる）。`width`・`height` は CSS px、`dpr` を掛けた大きさで確保し、毎フレーム `setTransform(dpr…)` してから描く。shadowBlur は座標変換の影響を受けないので `dpr` を掛ける
 - **HDR**：WebGPU `rgba16float` + `toneMapping: { mode: "extended" }` + `colorSpace: 'srgb'`、拡張sRGBエンコード（`encExt`）。背景もグレーも「線形値 × hdrGain」の同一スケール（最大チャンネル正規化はしない）
+- **描画の方式を全枠でそろえる**：同じ色の値でも、HDR と P3／sRGB では画面への出方が違うので、分割中に枠ごとに方式が食い違うと境界に段差が出る（iPad で「うっすらした線」として見えた。境界の全長で下の枠だけ一律に明るい段差）。各枠は出せる方式 `naturalKind` を `kind` で親へ送り、親（`hostUpdateKinds()`）は低い枠に一度だけ `retryRenderer` で準備し直させ、全枠の最低の方式を `allowKind` で配る。各枠は `useRenderer()` で min(自分の方式, `allowedKind`) で描く。ヘルプの「表示」の行に、そろえたことを書く
+- **描画のエラー**：`renderer.draw` が失敗しても、すぐに別の方式へ落とさない（以前は一度のエラーでその枠だけ永久に P3／sRGB になっていた）。そのコマは描かずに `onRenderError()` で WebGPU を準備し直し、続けて4回失敗したときだけ HDR をあきらめる（`hdrBroken`）。GPU が失われたとき（`device.lost`）も同じ
 - **HDR判定**：`(dynamic-range: high)` メディアクエリでゲートする（WebGPU の configure は SDR ディスプレイでも成功してしまうため）。`change` イベントを監視し `refreshRenderer()` で動的に追従。非HDR時は HDR輝度スライダー（`gainWrap`）を隠す
 - **駆動**：`noLoop()` + `requestAnimationFrame` で、30コマ/秒の刻み（`TICK_MS`）ごとに `redraw()`。描画中の時刻 `frameClock` はその刻みに丸めた絶対時刻（`performance.timeOrigin + rAF の時刻`）で、同じページの枠（iframe）では全部同じ値になる。位相は `clockMs()` 基準（`t0`・`pausedAt` も絶対時刻）。`millis()` は位相に使わない（タップの間隔判定だけ）
 

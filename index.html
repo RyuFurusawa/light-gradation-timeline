@@ -691,13 +691,13 @@ function draw() {
     EDGE_CORNERS.forEach(function (c) { diag[c] = evalSpec(diagSpec[c]); });
   }
 
-  // 現在色を選ばれたレンダラで画面全体に描く（HDR失敗時はP3/sRGBへ自動降格）
+  // 現在色を選ばれたレンダラで画面全体に描く
+  // エラーのときは、このコマは描かずに（前のコマの色のまま）準備し直す。すぐに別の方式へは落とさない
   try {
     renderer.draw(cur);
+    rendererFails = 0;
   } catch (e) {
-    const p3 = !!(window.matchMedia && window.matchMedia('(color-gamut: p3)').matches);
-    renderer = makeCssRenderer(p3);
-    renderer.draw(cur);
+    onRenderError(e);
   }
   // リングのキャンバスは透明に消してから描く（背景の色はレンダラが担当）
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1101,19 +1101,51 @@ function cornerAt(t, kx, ky) {
 
 /* ---------------- レンダラ検出 ---------------- */
 // ヘルプの「表示」の行。HDR：白を超える光まで出せる／P3広色域／sRGB
-function setDispKind(kind) {
+function setDispKind(kind, note) {
   let el = document.getElementById('dispKind');
   if (!el) { return; }
-  el.textContent = '表示：' + (kind === 'HDR' ? 'HDR（SDRの白を超える光まで出せます）' : kind === 'P3広色域' ? 'P3広色域（HDRではありません）' : 'sRGB（HDRではありません）');
+  el.textContent = '表示：' + (kind === 'HDR' ? 'HDR（SDRの白を超える光まで出せます）' : kind === 'P3広色域' ? 'P3広色域（HDRではありません）' : 'sRGB（HDRではありません）') + (note || '');
+}
+
+/* 描画の方式（HDR／P3広色域／sRGB）
+   同じ色の値でも、方式が違うと画面への出方（明るさ・色域の解釈）が違う。分割中に枠ごとに方式が食い違うと、
+   境界に段差が出る（iPad で見えた「うっすらした線」）。そこで：
+   ・各枠は自分の出せる方式（naturalKind）を親へ知らせ、親が全枠の最低の方式（allowedKind）を決めて配る。
+     各枠は min(自分の方式, allowedKind) で描く
+   ・描画中のエラーや GPU が失われたときは、すぐに通常の表示へ落とさず、まず WebGPU を準備し直す
+     （何度も続けて失敗したときだけ、出せる方式を下げて親へ知らせる） */
+const KIND_RANK = { 'sRGB': 0, 'P3広色域': 1, 'HDR': 2 };
+let naturalKind = null, allowedKind = 'HDR', rendererFails = 0, reinitTimer = null, hdrBroken = false;
+function p3Capable() {
+  return !!(window.matchMedia && window.matchMedia('(color-gamut: p3)').matches && window.CSS && CSS.supports('color', 'color(display-p3 1 1 1)'));
+}
+function useRenderer(r) {
+  // 親が許す方式より上なら、許す方式の CSS 表示にそろえる
+  if (IS_PANE && KIND_RANK[r.kind] > KIND_RANK[allowedKind]) { r = makeCssRenderer(allowedKind === 'P3広色域'); }
+  renderer = r;
+  if (gainWrap) { gainWrap.style.display = r.kind === 'HDR' ? 'flex' : 'none'; }
+  setDispKind(r.kind);
+  resizeGpu();
 }
 function refreshRenderer() {
   detectAndInitRenderer().then(function (r) {
-    renderer = r;
-    if (gainWrap) { gainWrap.style.display = r.kind === 'HDR' ? 'flex' : 'none'; }
-    setDispKind(r.kind);
-    if (IS_PANE) { toHost({ type: 'kind', kind: r.kind }); }
-    resizeGpu();
+    naturalKind = r.kind;
+    useRenderer(r);
+    if (IS_PANE) { toHost({ type: 'kind', kind: naturalKind }); }
   }).catch(function (e) { showErr(e); });
+}
+// 描画のエラー：少し待って準備し直す。続けて 4 回失敗したら、HDR をあきらめて出せる方式を下げる
+function onRenderError(e) {
+  rendererFails++;
+  if (rendererFails >= 4) {
+    hdrBroken = true;
+    let r = makeCssRenderer(p3Capable());
+    naturalKind = r.kind;
+    useRenderer(r);
+    if (IS_PANE) { toHost({ type: 'kind', kind: naturalKind }); }
+    return;
+  }
+  if (!reinitTimer) { reinitTimer = setTimeout(function () { reinitTimer = null; refreshRenderer(); }, 250 * rendererFails); }
 }
 
 async function detectAndInitRenderer() {
@@ -1121,11 +1153,13 @@ async function detectAndInitRenderer() {
   // WebGPUのHDR設定はSDRディスプレイでも「成功」してしまう（出力が頭打ちになるだけ）ため、
   // dynamic-range メディアクエリでの能力判定が必須。
   const hdrDisplay = !!(window.matchMedia && window.matchMedia('(dynamic-range: high)').matches);
-  if (hdrDisplay && navigator.gpu && !NO_HDR) {
+  if (hdrDisplay && navigator.gpu && !NO_HDR && !hdrBroken) {
     try {
       const adapter = await navigator.gpu.requestAdapter();
       if (adapter) {
         const device = await adapter.requestDevice();
+        // GPU が失われたら（端末の都合で手放されたなど）準備し直す
+        device.lost.then(function () { if (renderer && renderer.device === device) { onRenderError(new Error('device lost')); } });
         const canvas = document.getElementById('gpu');
         const ctx = canvas.getContext('webgpu');
         // HDRには16bit float形式が必須（8bit unormは1.0で頭打ち＝HDRにならない）
@@ -1320,6 +1354,7 @@ function makeWebGPURenderer(device, ctx, format) {
   resizeGpu();
   return {
     kind: 'HDR',
+    device: device,
     draw: function (rgb) {
       // 背景：線形値をhdrGain倍で持ち上げ（グレーと同一スケール＝輝度比較が正しく成立）
       let lr = s2l(constrain(rgb[0], 0, 255) / 255);
@@ -1837,6 +1872,14 @@ function initPaneMessaging() {
       layout(); applyResponsive();
     }
     else if (d.type === 'setMode') { setModeById(d.mode); }
+    else if (d.type === 'allowKind' && KIND_RANK.hasOwnProperty(d.kind)) {
+      let before = allowedKind;
+      allowedKind = d.kind;
+      if (!renderer || before === allowedKind) { return; }
+      if (KIND_RANK[renderer.kind] > KIND_RANK[allowedKind]) { useRenderer(makeCssRenderer(allowedKind === 'P3広色域')); }
+      else if (naturalKind && KIND_RANK[renderer.kind] < Math.min(KIND_RANK[naturalKind], KIND_RANK[allowedKind])) { refreshRenderer(); }
+    }
+    else if (d.type === 'retryRenderer') { hdrBroken = false; rendererFails = 0; refreshRenderer(); }
     else if (d.type === 'active') { paneActive = !!d.on; paneMulti = !!d.multi; }
     else if (d.type === 'blend') {
       blendOn = !!d.on; blendWidth = constrain(+d.width || 1, 0.05, 1);
@@ -2058,6 +2101,7 @@ function removePane(pane) {
   sib.parent = sp.parent;
   hostPanes = hostPanes.filter(function (q) { return q !== pane; });
   pane.div.remove();
+  hostUpdateKinds();
   hostSyncPanes();
 }
 
@@ -2235,6 +2279,26 @@ function makeDivider(sp) {
 }
 
 // 分割数・共通設定を全ペインへ配り直す（追加・削除・設定変更のたびに呼ぶ）
+// 全枠の描画の方式をそろえる。低い枠には一度だけ準備し直させ、それでも低ければ全枠をその方式にそろえる
+function hostUpdateKinds() {
+  let ks = hostPanes.map(function (q) { return q.kind; }).filter(function (k) { return !!k; });
+  if (!ks.length) { return; }
+  let best = ks.reduce(function (a, b) { return KIND_RANK[a] >= KIND_RANK[b] ? a : b; });
+  let low = ks.reduce(function (a, b) { return KIND_RANK[a] <= KIND_RANK[b] ? a : b; });
+  if (low !== best) {
+    hostPanes.forEach(function (q) {
+      if (q.kind && KIND_RANK[q.kind] < KIND_RANK[best] && !q.retried) {
+        q.retried = true;
+        try { q.frame.contentWindow.postMessage({ type: 'retryRenderer' }, '*'); } catch (err) {}
+      }
+    });
+  }
+  hostAllowedKind = low;
+  hostPanes.forEach(function (q) { try { q.frame.contentWindow.postMessage({ type: 'allowKind', kind: low }, '*'); } catch (err) {} });
+  setDispKind(low, low !== best ? '。一部の枠で ' + best + ' を使えなかったため、境界がそろうよう全部の枠を ' + low + ' にそろえています' : '');
+}
+let hostAllowedKind = 'HDR';
+
 function hostSyncPanes() {
   hostRebuildDividers();
   hostLayoutPanes();
@@ -2249,6 +2313,7 @@ function hostSendConfig(q) {
   try {
     let w = q.frame.contentWindow;
     w.postMessage({ type: 'shared', on: true, mode: mode, top: q.top }, '*');
+    w.postMessage({ type: 'allowKind', kind: hostAllowedKind }, '*');
     hostSendActive(q);
     w.postMessage({ type: 'blend', on: multi && blendOn, width: blendWidth,
       segs: {
@@ -2302,7 +2367,8 @@ function onHostMessage(ev) {
   } else if (d.type === 'hover') {
     hostSetActive(hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0]);
   } else if (d.type === 'kind') {
-    setDispKind(d.kind);
+    let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
+    if (me) { me.kind = d.kind; hostUpdateKinds(); }
   } else if (d.type === 'gesture') {
     requestWakeLock(true);
   }

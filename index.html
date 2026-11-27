@@ -392,7 +392,10 @@ let sharedUI = false, moreBtn = null, miniPause = null, sheetEl = null, panelEl 
 // キーストーンの出し分け。paneMulti＝2つ以上に分割中、paneActive＝親が選んだ枠（タッチ端末で使う）、
 // pointerIn＝マウスがこの枠の上にある。keyA＝色点の見え方、ringA＝白い輪の見え方（0..1、なめらかに追う）
 let paneMulti = false, paneActive = true, pointerIn = false, keyA = 0, ringA = 0;
-let tapSwallow = false;   // タッチ：キーストーンが隠れている枠への最初の一触りは、枠を選ぶだけにする      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
+let tapSwallow = false;
+// 色選びのシート（タッチ）を開いている間は、リングをシートの上の空きへ持ち上げる。
+// baseR・baseCy＝ふだんの位置（layout() が決める）、liftGoal＝持ち上げた先、sheetT＝0〜1 でなめらかに追う
+let baseR = 0, baseCy = 0, liftGoal = null, sheetT = 0;   // タッチ：キーストーンが隠れている枠への最初の一触りは、枠を選ぶだけにする      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
 // 境界グラデーション。子：隣の現在色（線形×ゲイン）を受け取り、枠の端へ向けて混ぜる
 // nb[側] ＝ その辺に接する隣の枠の並び。各要素 { a0, a1：辺の上での区間（0..1）, c：現在色 }
 let blendOn = false, blendWidth = 1, nb = { L: [], R: [], T: [], B: [] };
@@ -553,6 +556,7 @@ function layout() {
     cy = (A + B) / 2;
   }
   ringDims();
+  baseR = R; baseCy = cy;   // シートで持ち上げる前の位置（draw() が sheetT に応じて動かす）
   placeBars();
 }
 
@@ -612,6 +616,7 @@ function draw() {
   if (fs !== wasFs) { resizeCanvas(window.innerWidth, window.innerHeight); layout(); resizeGpu(); wasFs = fs; }
   // 分割で枠の幅が変わったとき、resize イベントが遅れて届くことがあるので、描画のたびに実寸と照合する
   if (width !== window.innerWidth || height !== window.innerHeight) { windowResized(); }
+  liftRing();
 
   let sorted = sortPoints();
   let a = getPhase() * TWO_PI - HALF_PI;
@@ -1431,6 +1436,34 @@ function touchStarted(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mousePr
 function touchMoved(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseDragged(e); return false; }
 function touchEnded(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseReleased(e); return false; }
 
+// シートの開閉に合わせて、リングを持ち上げる／戻す（シートのせり出しと同じくらいの速さで、少し弾むように）
+function liftRing() {
+  let open = !!(isCoarse && colorPop && colorPop.classList.contains('open') && liftGoal);
+  let goal = open ? 1 : 0;
+  if (sheetT === goal && !open) { return; }
+  sheetT += (goal - sheetT) * 0.32;
+  if (Math.abs(goal - sheetT) < 0.004) { sheetT = goal; }
+  let t = sheetT * (1 + 0.12 * Math.sin(Math.PI * sheetT));   // 行き過ぎて戻る、ささやかな弾み
+  let g = liftGoal || { R: baseR, cy: baseCy };
+  R = baseR + (g.R - baseR) * t;
+  cy = baseCy + (g.cy - baseCy) * t;
+  ringDims();
+  if (sheetT === 0 && !open) { R = baseR; cy = baseCy; ringDims(); liftGoal = null; }
+}
+// 持ち上げた先（大きさは変えない）：
+//  ・シートの上の空きにリング（針のつまみまで）がまるごと入るなら、そこへ移す（もともと入っていればそのまま）
+//  ・入らなければ（分割した低い枠など）、編集しているキーストーンとその周りのグラデーションがシートの上に見える所まで持ち上げる。
+//    リングの上側は枠の外へ出てもよい
+function computeLift(i) {
+  let sheetTop = height - colorPop.offsetHeight;
+  let m = ringReach() - R + 4, top = topInset + 26, bottom = sheetTop - 10;
+  if (baseCy + baseR + m <= bottom) { return { R: baseR, cy: baseCy }; }
+  if (2 * (baseR + m) <= bottom - top) { return { R: baseR, cy: (top + bottom) / 2 }; }
+  let ky = baseCy + sin(points[i].ang) * baseR;           // キーストーンの高さ（ふだんの位置で）
+  let need = ky + rd.point + 28 - bottom;                  // シートの上端から 28px 以上あける
+  return { R: baseR, cy: baseCy - Math.max(0, need) };
+}
+
 /* 色選びのパネル
    ブラウザ標準の色選び（隠した input type=color をプログラムから開く方式）は iPhone で開かないことがあったので、
    アプリ内のパネルにした：彩度×明度の面（HSB の S・B）と色相の帯。動かすとすぐキーストーンの色が変わる */
@@ -1525,6 +1558,7 @@ function openPickerAt(i, x, y) {
   if (isCoarse) {
     // タッチ：下からせり出す（位置は CSS が決める）。描いてから開くと、せり出す途中から色が見える
     applyPicker();
+    liftGoal = computeLift(i);
     requestAnimationFrame(function () { colorPop.classList.add('open'); });
     toHost({ type: 'picker', on: true });   // シートの上に親の＋や×が重ならないように隠してもらう
     return;

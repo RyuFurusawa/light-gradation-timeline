@@ -338,7 +338,8 @@ let blendOn = false, blendWidth = 1, nb = { L: [], R: [], T: [], B: [] };
 let cornerOn = { TL: false, TR: false, BL: false, BR: false }, diag = { TL: null, TR: null, BL: null, BR: null };
 let topInset = 0;                          // 子：上端に親の共通バーがあるとき、そのぶん下げる量
 let hostRoot = null, hostDividers = [];    // 親：分割の木（葉＝枠、節＝左右または上下の二分割と比率）
-const NO_HDR = /[?&]nohdr\b/.test(location.search);   // 検証用：HDRを使わず P3／sRGB の経路で描く
+const NO_HDR = /[?&]nohdr\b/.test(location.search);
+const NO_HALO = /[?&]halo=0\b/.test(location.search);   // 見比べ用：リングの光の縁（影）をなくす。色点は白い輪だけになる   // 検証用：HDRを使わず P3／sRGB の経路で描く
 let hostBar = null, blendBtn = null;
 
 let points = [];
@@ -1261,6 +1262,7 @@ function setHalo(rgb) {
   haloT = t * t * (3 - 2 * t);
 }
 function haloOn(blur, strength) {
+  if (NO_HALO) { return; }
   let k = (strength === undefined) ? 1 : strength;
   let v = Math.round(255 * (1 - haloT)), al = ((1 - haloT) * 0.6 + haloT * 0.45) * k;
   drawingContext.shadowColor = 'rgba(' + v + ',' + v + ',' + v + ',' + al.toFixed(3) + ')';
@@ -1644,7 +1646,7 @@ function makePane(state) {
   let f = document.createElement('iframe');
   f.setAttribute('allow', 'fullscreen');
   f.title = 'タイムライン';
-  f.src = location.pathname.split('/').pop() + '?pane=1' + (NO_HDR ? '&nohdr=1' : '') +
+  f.src = location.pathname.split('/').pop() + '?pane=1' + (NO_HDR ? '&nohdr=1' : '') + (NO_HALO ? '&halo=0' : '') +
     (state ? '#s=' + encodeURIComponent(JSON.stringify(state)) : '');
   let pane = { div: div, frame: f, node: null, rect: { x: 0, y: 0, w: 0, h: 0 }, nb: {}, top: 0 };
   div.appendChild(f);

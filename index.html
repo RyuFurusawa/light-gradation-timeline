@@ -169,6 +169,8 @@
   #infoPanel ul { padding-left: 1.3em; margin: 6px 0; }
   #infoPanel li { font-size: 13.5px; line-height: 1.95; color: rgba(255,255,255,0.92); margin: 2px 0; }
   #infoPanel b { color: #fff; font-weight: 600; }
+  #infoPanel a { color: #cfe6ff; text-decoration: underline; text-underline-offset: 2px; }
+  #infoPanel .refs li { font-size: 12.5px; line-height: 1.75; }
   #infoPanel .closeHint { text-align: center; font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 26px; }
   #infoPanel .wakeStatus {
     font-size: 13.5px; line-height: 1.8; margin: 8px 0; padding: 8px 12px; border-radius: 10px;
@@ -2730,12 +2732,24 @@ function buildInfoUI(parentEl) {
     '<li>「知覚明度(OKLab)で統一」はOKLabの物差しで揃えます。基準グレーは方式ごとの物差しなので、方式によっては一致しません——<b>「明度」の定義が違えば「揃った」の意味も違う</b>ということです</li>' +
     '<li>xy色度図は<b>明るさを捨てた座標</b>です。黒は色度が定義できないため、便宜上D65白色点の位置に表示しています</li>' +
     '</ul>' +
+    '<h3>参考</h3>' +
+    '<ul class="refs">' +
+    '<li><a href="https://bottosson.github.io/posts/oklab/" target="_blank" rel="noopener">A perceptual color space for image processing</a> — Björn Ottosson（2020）。OKLab の原典</li>' +
+    '<li><a href="https://raphlinus.github.io/color/2021/01/18/oklab-critique.html" target="_blank" rel="noopener">An interactive review of Oklab</a> — Raph Levien（2021）。CIELab で青の色相が紫へ曲がる癖と、OKLab での改善の比較</li>' +
+    '<li><a href="https://ja.wikipedia.org/wiki/Lab%E8%89%B2%E7%A9%BA%E9%96%93" target="_blank" rel="noopener">Lab色空間（Wikipedia）</a> — CIELab（1976）の定義と L*・a*・b*</li>' +
+    '<li><a href="https://www.w3.org/TR/css-color-4/#powerless" target="_blank" rel="noopener">CSS Color Module Level 4：Powerless color components</a> — W3C。無彩色の色相を「無力」とし、補間で相手の色相を引き継ぐ決まり</li>' +
+    '<li><a href="https://en.wikipedia.org/wiki/Helmholtz%E2%80%93Kohlrausch_effect" target="_blank" rel="noopener">Helmholtz–Kohlrausch effect（Wikipedia 英語版）</a> — 輝度が同じでも、彩度の高い色ほど明るく見える効果</li>' +
+    '</ul>' +
     '<p class="closeHint">画面のどこかをクリックすると閉じます（Escでも可）</p>' +
     '</div>';
   document.body.appendChild(infoPanel);
 
   infoBtn.addEventListener('click', function () { infoPanel.style.display = 'block'; });
-  infoPanel.addEventListener('click', function () { infoPanel.style.display = 'none'; });
+  // どこかを押すと閉じる（参考のリンクを押したときは、リンクを開くだけで閉じない）
+  infoPanel.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('a')) { return; }
+    infoPanel.style.display = 'none';
+  });
 }
 
 function updateModeBtns() {

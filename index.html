@@ -350,7 +350,11 @@ const IS_HOST = !IS_PANE;
 let hostPanes = [], hostStateWaiters = {}, hostReqId = 0;
 let gainSlider = null;
 let reversed = false, revBtn = null;       // 回転（読み取り）方向の逆転。false＝時計回り
-let sharedUI = false, moreBtn = null, miniPause = null, sheetEl = null, panelEl = null;      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
+let sharedUI = false, moreBtn = null, miniPause = null, sheetEl = null, panelEl = null;
+// キーストーンの出し分け。paneMulti＝2つ以上に分割中、paneActive＝親が選んだ枠（タッチ端末で使う）、
+// pointerIn＝マウスがこの枠の上にある。keyA＝色点の見え方、ringA＝白い輪の見え方（0..1、なめらかに追う）
+let paneMulti = false, paneActive = true, pointerIn = false, keyA = 0, ringA = 0;
+let tapSwallow = false;   // タッチ：キーストーンが隠れている枠への最初の一触りは、枠を選ぶだけにする      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
 // 境界グラデーション。子：隣の現在色（線形×ゲイン）を受け取り、枠の端へ向けて混ぜる
 // nb[側] ＝ その辺に接する隣の枠の並び。各要素 { a0, a1：辺の上での区間（0..1）, c：現在色 }
 let blendOn = false, blendWidth = 1, nb = { L: [], R: [], T: [], B: [] };
@@ -1248,7 +1252,27 @@ function keyHit(i, mx, my) {
   let p = points[i];
   return dist(mx, my, cx + cos(p.ang) * R, cy + sin(p.ang) * R) < hitR;
 }
+/* キーストーン（色点）の出し分け
+   マウス：この枠にマウスが入ったら色点だけが現れ、リングの上か内側に来たら白い輪が付く。離れると消えてリングだけになる。
+   タッチ（iPhone・iPad）：ホバーがないので常に表示。ただし分割中は、触れた枠（親が選んだ枠）だけ表示し、ほかの枠はリングだけ。
+   つかんでいる間は常に表示 */
+function updateKeyVisibility() {
+  let grab = (dragIdx >= 0 || dragPlayhead);
+  let dotT, ringT;
+  if (isCoarse) {
+    dotT = ringT = (!paneMulti || paneActive || grab) ? 1 : 0;
+  } else {
+    let near = pointerIn && dist(mouseX, mouseY, cx, cy) < R + rd.band / 2 + rd.point + 8;
+    dotT = (pointerIn || grab) ? 1 : 0;
+    ringT = (near || grab) ? 1 : 0;
+  }
+  keyA += (dotT - keyA) * 0.3; ringA += (ringT - ringA) * 0.3;
+  if (Math.abs(dotT - keyA) < 0.01) { keyA = dotT; }
+  if (Math.abs(ringT - ringA) < 0.01) { ringA = ringT; }
+}
 function drawPoints() {
+  updateKeyVisibility();
+  if (keyA <= 0 && dragIdx < 0) { return; }
   for (let i = 0; i < points.length; i++) {
     let p = points[i];
     let hovered = keyHit(i, mouseX, mouseY);
@@ -1268,11 +1292,14 @@ function drawPoints() {
       line(x - q, y - q, x + q, y + q); line(x - q, y + q, x + q, y - q);
       drawOutlinedText('離すと削除', x, y - rr - 16, 13, 255);
     } else {
-      // 白い縁の上に色を置く。つかんでいるときは縁（光の縁）を強く
-      haloOn(rr * 0.9 + 4, dragging ? 1.3 : 1);
-      fill(255); circle(x, y, (rr + ring) * 2);
-      haloOff();
-      fill(p.r, p.g, p.b); circle(x, y, rr * 2);
+      // 白い輪（リングに近づいたときだけ）の上に色を置く。つかんでいるときは縁（光の縁）を強く
+      let ra = (dragging || hovered) ? 1 : ringA;
+      if (ra > 0) {
+        haloOn(rr * 0.9 + 4, dragging ? 1.3 : 1);
+        fill(255, 255 * ra * keyA); circle(x, y, (rr + ring * ra) * 2);
+        haloOff();
+      }
+      fill(p.r, p.g, p.b, 255 * keyA); circle(x, y, rr * 2);
     }
   }
 }
@@ -1287,6 +1314,7 @@ function isCanvasEvent(e) { return !e || !e.target || e.target.tagName === 'CANV
 
 function mousePressed(e) {
   if (IS_HOST || !isCanvasEvent(e)) { return; }
+  if (isCoarse && paneMulti && !paneActive && !playMode) { tapSwallow = true; return; }
   if (playMode) { exitPlay(); return; }
   pressX = mouseX; pressY = mouseY; movedFar = false;
   dragIdx = -1; dragDelete = false; dragPlayhead = false;
@@ -1313,7 +1341,7 @@ function mousePressed(e) {
   }
 }
 function mouseDragged(e) {
-  if (IS_HOST) { return; }
+  if (IS_HOST || tapSwallow) { return; }
   if (dragPlayhead) {
     movedFar = true;
     let ang = atan2(mouseY - cy, mouseX - cx);
@@ -1337,6 +1365,7 @@ function mouseDragged(e) {
 }
 function mouseReleased(e) {
   if (IS_HOST) { return; }
+  if (tapSwallow) { tapSwallow = false; return; }
   if (dragPlayhead) { dragPlayhead = false; movedFar = false; return; }
   if (dragXYIdx >= 0) { dragXYIdx = -1; movedFar = false; return; }
   let wasTap = !movedFar;
@@ -1448,6 +1477,7 @@ function initPaneMessaging() {
       layout(); applyResponsive();
     }
     else if (d.type === 'setMode') { setModeById(d.mode); }
+    else if (d.type === 'active') { paneActive = !!d.on; paneMulti = !!d.multi; }
     else if (d.type === 'blend') {
       blendOn = !!d.on; blendWidth = constrain(+d.width || 1, 0.05, 1);
       // 辺ごとの区間の並び。並びが同じなら届いている色を引き継ぐ（設定が来るたびに一瞬つながりが切れないように）
@@ -1475,6 +1505,9 @@ function initPaneMessaging() {
   let lastHover = 0;
   let hover = function () { let t = Date.now(); if (t - lastHover > 400) { lastHover = t; toHost({ type: 'hover' }); } };
   document.addEventListener('pointermove', hover, true);
+  document.addEventListener('pointermove', function (ev) { if (ev.pointerType === 'mouse') { pointerIn = true; } }, true);
+  document.documentElement.addEventListener('pointerleave', function () { pointerIn = false; });
+  window.addEventListener('blur', function () { pointerIn = false; });
   document.addEventListener('pointerdown', function () { lastHover = Date.now(); toHost({ type: 'hover' }); }, true);
   toHost({ type: 'ready' });
 }
@@ -1589,6 +1622,11 @@ function hostSetActive(q) {
   if (!q || q === hostActive) { return; }
   hostActive = q;
   hostPanes.forEach(function (p) { p.div.classList.toggle('active', p === q); });
+  hostPanes.forEach(hostSendActive);
+}
+// 子へ「選ばれているか・分割中か」を知らせる（タッチ端末でキーストーンを出す枠を決める）
+function hostSendActive(p) {
+  try { p.frame.contentWindow.postMessage({ type: 'active', on: p === hostActive, multi: hostPanes.length > 1 }, '*'); } catch (err) {}
 }
 
 function hostFsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
@@ -1829,6 +1867,7 @@ function hostSendConfig(q) {
   try {
     let w = q.frame.contentWindow;
     w.postMessage({ type: 'shared', on: true, mode: mode, top: q.top }, '*');
+    hostSendActive(q);
     w.postMessage({ type: 'blend', on: multi && blendOn, width: blendWidth,
       segs: {
         L: q.nb.L.map(function (m) { return [m.a0, m.a1]; }), R: q.nb.R.map(function (m) { return [m.a0, m.a1]; }),
@@ -2549,6 +2588,7 @@ function buildInfoUI(parentEl) {
     '<p class="wakeStatus" id="dispKind">表示：確認中</p>' +
     '<h3>基本操作</h3>' +
     '<ul>' +
+    '<li><b>色点の表示</b> — マウスでは、カーソルを画面に入れると色点が現れ、サークルに近づけると白い輪が付きます。iPhone・iPad では常に表示（分割中は、最後に触れたタイムラインだけ）</li>' +
     '<li><b>色点をドラッグ</b> — タイミング（円周上の位置）を変える</li>' +
     '<li><b>色点を円の外へドラッグ</b> — 削除（最低2点は残ります）</li>' +
     '<li><b>色点を2回タップ／ダブルクリック</b> — カラーピッカーで色を変更</li>' +

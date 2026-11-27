@@ -20,7 +20,7 @@
   #gpu { position: fixed; inset: 0; width: 100%; height: 100%; display: none; z-index: 0; }
   /* 非HDR表示のときの境界グラデーション（小さな画像を全面に引き伸ばす） */
   #blend2d { position: fixed; inset: 0; width: 100%; height: 100%; display: none; z-index: 0; }
-  /* UI・リングを描くp5キャンバスは透明で最前面手前に重ねる */
+  /* UI・リングを描くキャンバスは透明で、全画面の色の手前に重ねる */
   .bar {
     position: absolute; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
     padding: 8px 10px; border-radius: 14px;
@@ -53,7 +53,8 @@
   .segGroup { display: flex; border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; overflow: hidden; }
   .segGroup button { border: none !important; border-radius: 0 !important; }
   .segGroup button + button { border-left: 1px solid rgba(255,255,255,0.18) !important; }
-  canvas.p5Canvas { position: relative; z-index: 1; touch-action: none; }
+  /* リング・色点・xy色度図を描く 2D キャンバス（透明、全画面の色の上に重ねる） */
+  canvas.ringCanvas { position: fixed; left: 0; top: 0; z-index: 1; touch-action: none; display: block; }
   @media (pointer: coarse) {
     /* タッチ端末：押しやすさ（高さ 36px 以上）は保ちつつ、文字は控えめに */
     .bar { gap: 8px; padding: 8px 10px; max-width: 94vw; }
@@ -360,7 +361,6 @@
     font: 12px/1.5 monospace; white-space: pre-wrap;
   }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
 </head>
 <body>
 <canvas id="gpu"></canvas>
@@ -374,6 +374,50 @@
    第三段 sRGB … 通常表示
    起動時に能力検出して最良の一つを選ぶ。補間ロジックは全段共通。
    ========================================================= */
+
+/* ---------------- 基本の道具 ----------------
+   ライブラリには頼らない。描画は Canvas 2D、部品は DOM、入力は Pointer Events（マウスとタッチを1つの仕組みで扱う）、
+   全画面の色は WebGPU（HDR）か CSS。ここには、そのために使う小さな数学関数とキャンバスの状態を置く */
+const PI = Math.PI, TWO_PI = Math.PI * 2, HALF_PI = Math.PI / 2, QUARTER_PI = Math.PI / 4;
+const sin = Math.sin, cos = Math.cos, atan2 = Math.atan2, abs = Math.abs, min = Math.min, max = Math.max, pow = Math.pow, sqrt = Math.sqrt;
+function constrain(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
+// リングを描くキャンバス。width・height は CSS の px、dpr は画素の密度。mouseX・mouseY はキャンバス上のポインタ位置
+let cnv = null, ctx = null, dpr = 1, width = 0, height = 0, mouseX = -9999, mouseY = -9999;
+function sizeRingCanvas() {
+  dpr = window.devicePixelRatio || 1;
+  width = window.innerWidth; height = window.innerHeight;
+  cnv.width = Math.round(width * dpr); cnv.height = Math.round(height * dpr);
+  cnv.style.width = width + 'px'; cnv.style.height = height + 'px';
+}
+// 色の文字列（a は 0..255）
+function rgba(r, g, b, a) {
+  return 'rgba(' + Math.round(constrain(r, 0, 255)) + ',' + Math.round(constrain(g, 0, 255)) + ',' + Math.round(constrain(b, 0, 255)) + ',' + (a === undefined ? 1 : constrain(a / 255, 0, 1)) + ')';
+}
+function disc(x, y, d, style) { ctx.fillStyle = style; ctx.beginPath(); ctx.arc(x, y, d / 2, 0, TWO_PI); ctx.fill(); }
+function ringLine(x, y, d, style, w) { ctx.strokeStyle = style; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(x, y, d / 2, 0, TWO_PI); ctx.stroke(); }
+function seg(x0, y0, x1, y1, style, w) { ctx.strokeStyle = style; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); }
+function polyline(pts, style, w) {
+  ctx.strokeStyle = style; ctx.lineWidth = w; ctx.lineJoin = 'round'; ctx.beginPath();
+  pts.forEach(function (q, i) { if (i === 0) { ctx.moveTo(q[0], q[1]); } else { ctx.lineTo(q[0], q[1]); } });
+  ctx.closePath(); ctx.stroke();
+}
+// DOM の部品を作る小さな道具：el('button', { id, cls, html, text, title, parent, attrs, style, on: { click: fn } })
+function el(tag, o) {
+  let e = document.createElement(tag);
+  o = o || {};
+  if (o.id) { e.id = o.id; }
+  if (o.cls) { e.className = o.cls; }
+  if (o.html !== undefined) { e.innerHTML = o.html; }
+  if (o.text !== undefined) { e.textContent = o.text; }
+  if (o.title) { e.title = o.title; e.setAttribute('aria-label', o.title); }
+  if (o.attrs) { for (let k in o.attrs) { e.setAttribute(k, o.attrs[k]); } }
+  if (o.style) { for (let k in o.style) { e.style[k] = o.style[k]; } }
+  if (o.on) { for (let k in o.on) { e.addEventListener(k, o.on[k]); } }
+  (o.parent || document.body).appendChild(e);
+  return e;
+}
 
 window.addEventListener('error', function (ev) {
   var b = document.getElementById('errbox');
@@ -471,24 +515,23 @@ let fsBtn = null;
 let wakeLock = null;          // WakeLockSentinel（保持中のみ非null）
 let wakeState = 'pending';    // pending | on | unsupported | failed
 let wakeRequesting = false, wakeNotice = null, wakeNoticeShown = false;
-let topBar, timeBar, colorBar, viewBar, pauseBtn, durNum, durSlider, gainNum, gainWrap, restoreBtn = null, checkBtn, xyBtn, modeBtns = {};
+let timeBar, colorBar, viewBar, pauseBtn, durNum, durSlider, gainWrap, restoreBtn = null, checkBtn, xyBtn;
 let lumaSegBtns = {}, lumaMode = 'none';
 let modeLabels = {};
 
-/* ---------------- p5 ---------------- */
+/* ---------------- 起動と配置 ---------------- */
 function setup() {
   if (IS_HOST) {
-    noCanvas(); noLoop();
     buildHost();
     initWakeLock();
     registerServiceWorker();
     return;
   }
-  let c = createCanvas(window.innerWidth, window.innerHeight);
-  c.class('p5Canvas');
-  mainCanvasElt = c.elt;
+  cnv = el('canvas', { cls: 'ringCanvas' });
+  ctx = cnv.getContext('2d');
+  mainCanvasElt = cnv;
+  sizeRingCanvas();
   layout();
-  textFont('system-ui, sans-serif');
 
   // 初期値：光の三原色（赤・緑・青）
   points.push({ ang: -HALF_PI,                r: 255, g: 0,   b: 0   });
@@ -518,7 +561,8 @@ function setup() {
     } catch (e) { /* 監視非対応環境では初回判定のみ */ }
   }
 
-  noLoop();
+  bindInput();
+  window.addEventListener('resize', windowResized);
   // 同じページの枠（iframe）は同じ画面更新で rAF が呼ばれ、時刻もそろう。それを 30 コマ/秒の刻みに丸めて描く。
   // 全枠が同じ時刻で自分と隣の色を計算するので、境界の両側で色がずれない（以前は隣の色が1〜2コマ遅れて届き、境界に段差が出た）
   const TICK_MS = 1000 / 30;
@@ -530,7 +574,7 @@ function setup() {
     if (k === lastTick) { return; }
     lastTick = k;
     frameClock = k * TICK_MS;
-    try { redraw(); } catch (err) { showErr(err); }
+    try { draw(); } catch (err) { showErr(err); }
     frameClock = null;
   })();
 }
@@ -566,7 +610,7 @@ function layout() {
   } else {
     // 上の共通バー（topInset）と下の操作パネルのあいだに、針のつまみ（m）ごと収まる最大のリング。
     // パネルの高さは開いている段の数で変わるので、実際の高さを測る（ResizeObserver が測り直しを呼ぶ）
-    let ph = (panelEl && panelEl.elt.offsetHeight) || 58, m = 27;
+    let ph = (panelEl && panelEl.offsetHeight) || 58, m = 27;
     let A = topInset + 26 + m + 6, B = height - 26 - ph - 10 - m;
     R = Math.max(30, Math.min(min(width, height) * 0.38, width / 2 - 22 - m, (B - A) / 2));
     cy = (A + B) / 2;
@@ -592,7 +636,7 @@ function placeBars() {
   // それ以外：時間・観察・色はリングの下の操作パネル（CSS で下端中央に固定）にまとめてある
 }
 
-function windowResized() { if (IS_HOST) { return; } resizeCanvas(window.innerWidth, window.innerHeight); layout(); resizeGpu(); applyResponsive(); }
+function windowResized() { if (IS_HOST) { return; } sizeRingCanvas(); layout(); resizeGpu(); applyResponsive(); }
 
 function resizeGpu() {
   let g = document.getElementById('gpu');
@@ -620,16 +664,16 @@ function setReversed(v) {
   reversed = !!v;
   setPhase(ph);
   if (revBtn) {
-    revBtn.html(reversed ? '\u21ba' : '\u21bb');
-    if (reversed) { revBtn.addClass('active'); } else { revBtn.removeClass('active'); }
+    revBtn.textContent = reversed ? '\u21ba' : '\u21bb';
+    revBtn.classList.toggle('active', reversed);
   }
 }
 
 /* ---------------- ループ ---------------- */
 function draw() {
   if (IS_HOST) { return; }
-  let fs = !!fullscreen();
-  if (fs !== wasFs) { resizeCanvas(window.innerWidth, window.innerHeight); layout(); resizeGpu(); wasFs = fs; }
+  let fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (fs !== wasFs) { sizeRingCanvas(); layout(); resizeGpu(); wasFs = fs; }
   // 分割で枠の幅が変わったとき、resize イベントが遅れて届くことがあるので、描画のたびに実寸と照合する
   if (width !== window.innerWidth || height !== window.innerHeight) { windowResized(); }
   liftRing();
@@ -655,7 +699,9 @@ function draw() {
     renderer = makeCssRenderer(p3);
     renderer.draw(cur);
   }
-  clear();   // p5キャンバスは透明化（背景はレンダラが担当）
+  // リングのキャンバスは透明に消してから描く（背景の色はレンダラが担当）
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
 
   if (playMode) {
     if (showLumaCheck) { drawLumaCheck(); }
@@ -1063,7 +1109,7 @@ function setDispKind(kind) {
 function refreshRenderer() {
   detectAndInitRenderer().then(function (r) {
     renderer = r;
-    if (gainWrap) { gainWrap.style('display', r.kind === 'HDR' ? 'flex' : 'none'); }
+    if (gainWrap) { gainWrap.style.display = r.kind === 'HDR' ? 'flex' : 'none'; }
     setDispKind(r.kind);
     if (IS_PANE) { toHost({ type: 'kind', kind: r.kind }); }
     resizeGpu();
@@ -1355,23 +1401,26 @@ function haloOn(blur, strength) {
   if (NO_HALO) { return; }
   let k = (strength === undefined) ? 1 : strength;
   let v = Math.round(255 * (1 - haloT)), al = ((1 - haloT) * 0.6 + haloT * 0.45) * k;
-  drawingContext.shadowColor = 'rgba(' + v + ',' + v + ',' + v + ',' + al.toFixed(3) + ')';
-  drawingContext.shadowBlur = blur * pixelDensity();
-  drawingContext.shadowOffsetX = 0; drawingContext.shadowOffsetY = 0;
+  ctx.shadowColor = 'rgba(' + v + ',' + v + ',' + v + ',' + al.toFixed(3) + ')';
+  ctx.shadowBlur = blur * dpr;   // shadowBlur は座標変換の影響を受けないので画素の密度を掛ける
+  ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
 }
-function haloOff() { drawingContext.shadowBlur = 0; drawingContext.shadowColor = 'rgba(0,0,0,0)'; }
+function haloOff() { ctx.shadowBlur = 0; ctx.shadowColor = 'rgba(0,0,0,0)'; }
 
 function drawRing(sorted) {
   // 光の縁は、帯の下に1本だけ描いた円から出す（360本の線それぞれに影を付けると重い）
-  haloOn(rd.band * 0.8 + 6);
-  noFill(); stroke(0); strokeWeight(Math.max(1, rd.band - 1.5)); circle(cx, cy, R * 2);
-  haloOff();
-  let steps = 360; strokeWeight(rd.band); strokeCap(ROUND);
+  if (!NO_HALO) {
+    haloOn(rd.band * 0.8 + 6);
+    ringLine(cx, cy, R * 2, '#000', Math.max(1, rd.band - 1.5));
+    haloOff();
+  }
+  let steps = 360;
+  ctx.lineWidth = rd.band; ctx.lineCap = 'round';
   for (let k = 0; k < steps; k++) {
     let a0 = k / steps * TWO_PI, a1 = (k + 1.35) / steps * TWO_PI;
     let c = sampleAt(a0 + 0.0001, sorted);
-    stroke(c[0], c[1], c[2]);
-    line(cx + cos(a0) * R, cy + sin(a0) * R, cx + cos(a1) * R, cy + sin(a1) * R);
+    ctx.strokeStyle = rgba(c[0], c[1], c[2]);
+    ctx.beginPath(); ctx.moveTo(cx + cos(a0) * R, cy + sin(a0) * R); ctx.lineTo(cx + cos(a1) * R, cy + sin(a1) * R); ctx.stroke();
   }
 }
 function drawPlayhead(a) {
@@ -1379,11 +1428,11 @@ function drawPlayhead(a) {
   let x0 = cx + cos(a) * (R - L), y0 = cy + sin(a) * (R - L);
   let x1 = cx + cos(a) * (R + L), y1 = cy + sin(a) * (R + L);
   haloOn(5 + 3 * s, 0.9);
-  stroke(255); strokeWeight(Math.max(1.5, 2.4 * s)); strokeCap(ROUND); line(x0, y0, x1, y1);
+  seg(x0, y0, x1, y1, '#fff', Math.max(1.5, 2.4 * s));
   // つまみ：マウスはリングに近づいたとき（白い輪と同じ ringA）だけ、タッチは選んでいる枠だけに出す。ほかは線だけ
   updateKeyVisibility();
   let ka = dragPlayhead ? 1 : (isCoarse ? keyA : ringA);
-  if (ka > 0) { noStroke(); fill(255, 255 * ka); circle(x1, y1, rd.knob); }
+  if (ka > 0) { disc(x1, y1, rd.knob, rgba(255, 255, 255, 255 * ka)); }
   haloOff();
 }
 // (mx, my) が i 番目のキーストーン（色点）に当たっているか
@@ -1419,36 +1468,36 @@ function drawPoints() {   // 見え方（keyA・ringA）は drawPlayhead で更�
     let rr = (dragging || hovered) ? base * 1.18 : base;
     let ring = Math.max(1.5, rd.point * 0.17);   // キーストーンを囲む白い細い縁
     let x = cx + cos(p.ang) * R, y = cy + sin(p.ang) * R;
-    noStroke();
     if (dragging && dragDelete) {
       haloOn(rr * 0.9 + 4);
-      fill(255, 90, 90); circle(x, y, (rr + ring) * 2);
+      disc(x, y, (rr + ring) * 2, rgba(255, 90, 90));
       haloOff();
-      fill(p.r, p.g, p.b, 110); circle(x, y, rr * 2);
-      let q = rr * 0.45;
-      stroke(255); strokeWeight(Math.max(1.5, ring)); strokeCap(ROUND);
-      line(x - q, y - q, x + q, y + q); line(x - q, y + q, x + q, y - q);
+      disc(x, y, rr * 2, rgba(p.r, p.g, p.b, 110));
+      let q = rr * 0.45, w = Math.max(1.5, ring);
+      seg(x - q, y - q, x + q, y + q, '#fff', w); seg(x - q, y + q, x + q, y - q, '#fff', w);
       drawOutlinedText('離すと削除', x, y - rr - 16, 13, 255);
     } else {
       // 白い輪（リングに近づいたときだけ）の上に色を置く。つかんでいるときは縁（光の縁）を強く
       let ra = (dragging || hovered) ? 1 : ringA;
       if (ra > 0) {
         haloOn(rr * 0.9 + 4, dragging ? 1.3 : 1);
-        fill(255, 255 * ra * keyA); circle(x, y, (rr + ring * ra) * 2);
+        disc(x, y, (rr + ring * ra) * 2, rgba(255, 255, 255, 255 * ra * keyA));
         haloOff();
       }
-      fill(p.r, p.g, p.b, 255 * keyA); circle(x, y, rr * 2);
+      disc(x, y, rr * 2, rgba(p.r, p.g, p.b, 255 * keyA));
     }
   }
 }
-function drawOutlinedText(s, x, y, size, al) {
-  push(); textAlign(CENTER, CENTER); textSize(size); textStyle(BOLD);
-  fill(0, al * 0.8); noStroke(); text(s, x + 1, y + 1);
-  fill(255, al); text(s, x, y); pop();
+// 縁取りつきの文字（どんな背景の上でも読めるよう、黒い影の上に白）
+function drawOutlinedText(str, x, y, size, al, weight) {
+  ctx.font = (weight || 'bold') + ' ' + size + 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = rgba(0, 0, 0, al * 0.8); ctx.fillText(str, x + 1, y + 1);
+  ctx.fillStyle = rgba(255, 255, 255, al); ctx.fillText(str, x, y);
 }
 
 /* ---------------- 操作 ---------------- */
-// リングを描く p5 のキャンバスへの操作か。色選びの面など、ほかの canvas 要素への操作は含めない
+// リングを描くキャンバスへの操作か。色選びの面など、ほかの canvas 要素への操作は含めない
 // （iPhone ではタッチの知らせが別に届き、色選びの面を触るとパネルが閉じていた）
 let mainCanvasElt = null;
 function isCanvasEvent(e) { return !e || !e.target || (mainCanvasElt ? e.target === mainCanvasElt : e.target.tagName === 'CANVAS'); }
@@ -1521,7 +1570,7 @@ function handleTap(x, y) {
     let px = cx + cos(points[i].ang) * R, py = cy + sin(points[i].ang) * R;
     if (keyHit(i, x, y)) {
       // タッチは1回のタップ、マウスはダブルクリックで色選びを開く
-      let now = millis();
+      let now = performance.now();
       if (isCoarse || (now - lastTapT < 400 && dist(x, y, lastTapX, lastTapY) < 40)) { lastTapT = -99999; openPickerAt(i, px, py); }
       else { lastTapT = now; lastTapX = x; lastTapY = y; }
       return;
@@ -1535,9 +1584,36 @@ function handleTap(x, y) {
   }
 }
 
-function touchStarted(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mousePressed(e); return false; }
-function touchMoved(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseDragged(e); return false; }
-function touchEnded(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseReleased(e); return false; }
+// 入力：Pointer Events でマウスとタッチを同じに扱う。押している1本の指（ポインタ）だけを追う
+let activePointer = null;
+function bindInput() {
+  function setXY(ev) { mouseX = ev.clientX; mouseY = ev.clientY; }
+  window.addEventListener('pointermove', setXY, true);   // ホバーの判定（キーストーンの出し分け）にも使う
+  cnv.addEventListener('pointerdown', function (ev) {
+    if (activePointer !== null) { return; }
+    setXY(ev);
+    activePointer = ev.pointerId;
+    try { cnv.setPointerCapture(ev.pointerId); } catch (err) {}
+    mousePressed(ev);
+    ev.preventDefault();
+  });
+  cnv.addEventListener('pointermove', function (ev) {
+    if (ev.pointerId !== activePointer) { return; }
+    setXY(ev);
+    mouseDragged(ev);
+  });
+  function end(ev) {
+    if (ev.pointerId !== activePointer) { return; }
+    setXY(ev);
+    activePointer = null;
+    mouseReleased(ev);
+    // タッチは指を離すとホバーの位置が残らないよう、画面の外へ
+    if (ev.pointerType !== 'mouse') { mouseX = mouseY = -9999; }
+  }
+  cnv.addEventListener('pointerup', end);
+  cnv.addEventListener('pointercancel', end);
+  document.addEventListener('keydown', keyPressed);
+}
 
 // シートの開閉に合わせて、リングを持ち上げる／戻す（シートのせり出しと同じくらいの速さで、少し弾むように）
 function liftRing() {
@@ -1619,7 +1695,7 @@ function buildColorPop() {
     applyPicker();
   });
   // パネルの中での操作が、リングのキャンバスの操作（パネルを閉じる・色点を足す）へ漏れないように。
-  // タッチ・マウスの知らせも止める（p5 は window で受けている）
+  // タッチ・マウスの知らせも止める
   ['pointerdown', 'mousedown', 'touchstart', 'touchmove', 'touchend'].forEach(function (n) {
     colorPop.addEventListener(n, function (ev) { ev.stopPropagation(); }, { passive: true });
   });
@@ -1688,11 +1764,12 @@ function closePicker() {
   pickTarget = -1;
 }
 
-function keyPressed() {
+function keyPressed(ev) {
   if (IS_HOST) { return; }
-  if (key === 'f' || key === 'F') { enterPlay(); }
-  if (key === ' ') { togglePause(); }
-  if (keyCode === ESCAPE) { exitPlay(); closePicker(); if (infoPanel) { infoPanel.style.display = 'none'; } }
+  if (ev.target && (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA')) { return; }   // 秒数の入力中は無視
+  if (ev.key === 'f' || ev.key === 'F') { enterPlay(); }
+  if (ev.key === ' ') { togglePause(); ev.preventDefault(); }
+  if (ev.key === 'Escape') { exitPlay(); closePicker(); if (infoPanel) { infoPanel.style.display = 'none'; } }
 }
 
 // フルスクリーンは親ページが画面全体で行い、全ペインのUIを同時に消す。
@@ -1719,7 +1796,7 @@ function applyPlay(on) {
     closePicker();
     document.body.classList.remove('moreOpen');
     syncSheet();
-    topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
+    // 操作パネルは CSS（body.play）で隠れる
     if (infoBtn) { infoBtn.style.display = 'none'; }
     if (infoPanel) { infoPanel.style.display = 'none'; }
     if (modeSwitch) { modeSwitch.style.display = 'none'; }
@@ -1729,9 +1806,7 @@ function applyPlay(on) {
   }
   playMode = false;
   // show()が付与するインラインdisplayはCSSと競合するため、クラス制御に戻す
-  [topBar, timeBar, colorBar, viewBar].forEach(function (b) {
-    if (b) { b.show(); b.elt.style.display = ''; }
-  });
+
   if (infoBtn) { infoBtn.style.display = 'block'; }
   if (fsBtn) { fsBtn.style.display = 'flex'; }
   if (modeSwitch) { modeSwitch.style.display = ''; }
@@ -1825,9 +1900,9 @@ function applyStateFromHash() {
   for (let i = 0; i < MODE_LIST.length; i++) { if (MODE_LIST[i][1] === st.mode) { mode = st.mode; } }
   updateModeBtns();
   if (st.loopDur > 0) { setDur(+st.loopDur); }
-  if (st.hdrGain > 0) { hdrGain = +st.hdrGain; if (gainSlider) { gainSlider.value(hdrGain); } }
-  showXY = !!st.showXY; if (showXY) { xyBtn.addClass('active'); }
-  showLumaCheck = !!st.showLumaCheck; if (showLumaCheck) { checkBtn.addClass('active'); }
+  if (st.hdrGain > 0) { hdrGain = +st.hdrGain; if (gainSlider) { gainSlider.value = String(hdrGain); } }
+  showXY = !!st.showXY; xyBtn.classList.toggle('active', showXY);
+  showLumaCheck = !!st.showLumaCheck; checkBtn.classList.toggle('active', showLumaCheck);
   let ph = +st.phase || 0;
   if (st.paused) {
     paused = true; pausedAt = clockMs();
@@ -2258,7 +2333,7 @@ function togglePause() {
   syncPauseIcon();
 }
 function syncPauseIcon() {
-  pauseBtn.html(paused ? ICON_PLAY : ICON_PAUSE);
+  pauseBtn.innerHTML = paused ? ICON_PLAY : ICON_PAUSE;
   if (miniPause) { miniPause.innerHTML = paused ? ICON_PLAY : ICON_PAUSE; }
 }
 // ごく小さい枠で ⋯ を開いているあいだは、操作パネルをシートの中へ移す。閉じたら戻す
@@ -2266,10 +2341,10 @@ function syncSheet() {
   if (!sheetEl || !timeBar) { return; }
   let open = document.body.classList.contains('mini') && document.body.classList.contains('moreOpen') && !playMode;
   if (!panelEl) { return; }
-  if (open && panelEl.elt.parentNode !== sheetEl) {
-    sheetEl.appendChild(panelEl.elt);
-  } else if (!open && panelEl.elt.parentNode === sheetEl) {
-    document.body.insertBefore(panelEl.elt, sheetEl);
+  if (open && panelEl.parentNode !== sheetEl) {
+    sheetEl.appendChild(panelEl);
+  } else if (!open && panelEl.parentNode === sheetEl) {
+    document.body.insertBefore(panelEl, sheetEl);
   }
   // 上は親の×（topInset+26 から 32px）、下は ⏸ ⋯ の列のぶん空ける
   sheetEl.style.paddingTop = (topInset + 66) + 'px';
@@ -2363,7 +2438,7 @@ function setDur(v) {
   let p = getPhase();
   loopDur = v;
   setPhase(p);
-  durNum.value(v); durSlider.value(v);
+  durNum.value = String(v); durSlider.value = String(v);
 }
 
 function equalizeLuma(kind) {
@@ -2451,8 +2526,7 @@ function restoreLuma() {
 
 function updateLumaButtons() {
   if (!restoreBtn) { return; }
-  if (lumaSnapshot) { restoreBtn.style('display', 'inline-block'); }
-  else { restoreBtn.style('display', 'none'); }
+  restoreBtn.style.display = lumaSnapshot ? 'inline-block' : 'none';
 }
 
 // グレー基準面とxy図の共有レイアウト：両方表示なら円内を上下に等分
@@ -2467,23 +2541,16 @@ function drawLumaCheck() {
   let g = grayForMode();
   let gl = grayLayout();
   let s = gl[0], gy = gl[1];
-  // HDRレンダラのときは矩形をWebGPU側で描くので、p5では文字だけ
+  // HDRレンダラのときは矩形をWebGPU側で描くので、ここでは文字だけ
   if (!renderer || renderer.kind !== 'HDR') {
-    push();
-    rectMode(CENTER);
-    noStroke();
-    fill(g[0], g[1], g[2]);
-    rect(cx, gy, s, s);
-    pop();
+    ctx.fillStyle = rgba(g[0], g[1], g[2]);
+    ctx.fillRect(cx - s / 2, gy - s / 2, s, s);
   }
   if (!playMode) {
-    push();
-    noStroke(); fill(0, 130);
-    textAlign(CENTER, CENTER); textSize(12); textStyle(NORMAL);
-    text(grayLabel, cx + 1, gy - s / 2 - 13);
-    fill(255, 210);
-    text(grayLabel, cx, gy - s / 2 - 14);
-    pop();
+    ctx.font = '12px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = rgba(0, 0, 0, 130); ctx.fillText(grayLabel, cx + 1, gy - s / 2 - 13);
+    ctx.fillStyle = rgba(255, 255, 255, 210); ctx.fillText(grayLabel, cx, gy - s / 2 - 14);
   }
 }
 
@@ -2496,7 +2563,7 @@ function grayForMode() {
     let sum = 0;
     for (let i = 0; i < n; i++) { sum += rgb2hsv(points[i].r, points[i].g, points[i].b)[2]; }
     let v = sum / n;
-    grayLabel = 'HSB基準グレー（平均B=' + nf(v * 100, 1, 1) + '%）';
+    grayLabel = 'HSB基準グレー（平均B=' + (v * 100).toFixed(1) + '%）';
     let c = v * 255;
     return [c, c, c];
   }
@@ -2508,7 +2575,7 @@ function grayForMode() {
       sum += Y;
     }
     let Y = sum / n;
-    grayLabel = '光量基準グレー（平均輝度Y=' + nf(Y, 1, 3) + '）';
+    grayLabel = '光量基準グレー（平均輝度Y=' + Y.toFixed(3) + '）';
     let c = l2s(Y) * 255;
     return [c, c, c];
   }
@@ -2517,21 +2584,21 @@ function grayForMode() {
     let sum = 0;
     for (let i = 0; i < n; i++) { sum += (points[i].r + points[i].g + points[i].b) / 3; }
     let c = sum / n;
-    grayLabel = '画素値基準グレー（平均=' + nf(c, 1, 0) + '/255）';
+    grayLabel = '画素値基準グレー（平均=' + Math.round(c) + '/255）';
     return [c, c, c];
   }
   if (mode === 'cielch' || mode === 'cielabLin') {
     let sum = 0;
     for (let i = 0; i < n; i++) { sum += rgb2lab(points[i].r, points[i].g, points[i].b)[0]; }
     let L = sum / n;
-    grayLabel = 'CIELab基準グレー（平均L*=' + nf(L, 1, 1) + '）';
+    grayLabel = 'CIELab基準グレー（平均L*=' + L.toFixed(1) + '）';
     return lab2rgb(L, 0, 0);
   }
   // oklch / step：OKLab-L 平均
   let sum = 0;
   for (let i = 0; i < n; i++) { sum += rgb2oklch(points[i].r, points[i].g, points[i].b)[0]; }
   let L = sum / n;
-  grayLabel = 'OKLab基準グレー（平均L=' + nf(L, 1, 3) + '）';
+  grayLabel = 'OKLab基準グレー（平均L=' + L.toFixed(3) + '）';
   return oklch2rgb(L, 0, 0);
 }
 
@@ -2566,10 +2633,12 @@ function insideLocus(x, y) {
 function xyPixX(x, dx, dw) { return dx + x / 0.8 * dw; }
 function xyPixY(y, dy, dh) { return dy + dh - y / 0.9 * dh; }
 
+// 馬蹄形の色（線形→sRGB）を塗った下地を、別のキャンバスに1回だけ描いておく（大きさが変わったら描き直す）
 function buildXYBuffer(dw, dh) {
-  let g = createGraphics(dw, dh);
-  g.pixelDensity(1);
-  g.loadPixels();   // 背景は透明のまま（馬蹄形の外は描かない）
+  let g = document.createElement('canvas');
+  g.width = dw; g.height = dh;
+  let gc = g.getContext('2d');
+  let img = gc.createImageData(dw, dh), px4 = img.data;   // 背景は透明のまま（馬蹄形の外は描かない）
   for (let py = 0; py < dh; py++) {
     for (let px = 0; px < dw; px++) {
       let x = px / dw * 0.8, y = (dh - py) / dh * 0.9;
@@ -2583,33 +2652,21 @@ function buildXYBuffer(dw, dh) {
       if (mx <= 0) { continue; }
       R = Math.max(R / mx, 0); G = Math.max(G / mx, 0); B = Math.max(B / mx, 0);
       let idx = (py * dw + px) * 4;
-      g.pixels[idx] = l2s(R) * 255;
-      g.pixels[idx + 1] = l2s(G) * 255;
-      g.pixels[idx + 2] = l2s(B) * 255;
-      g.pixels[idx + 3] = 255;
+      px4[idx] = l2s(R) * 255; px4[idx + 1] = l2s(G) * 255; px4[idx + 2] = l2s(B) * 255; px4[idx + 3] = 255;
     }
   }
-  g.updatePixels();
+  gc.putImageData(img, 0, 0);
   // 馬蹄形の輪郭（どんな背景色の上でも読めるよう黒＋白の二重線）
-  g.noFill();
-  g.stroke(0, 130); g.strokeWeight(2.5);
-  g.beginShape();
-  for (let i = 0; i < XY_LOCUS.length; i++) { g.vertex(xyPixX(XY_LOCUS[i][0], 0, dw), xyPixY(XY_LOCUS[i][1], 0, dh)); }
-  g.endShape(CLOSE);
-  g.stroke(255, 150); g.strokeWeight(1);
-  g.beginShape();
-  for (let i = 0; i < XY_LOCUS.length; i++) { g.vertex(xyPixX(XY_LOCUS[i][0], 0, dw), xyPixY(XY_LOCUS[i][1], 0, dh)); }
-  g.endShape(CLOSE);
+  let loc = XY_LOCUS.map(function (q) { return [xyPixX(q[0], 0, dw), xyPixY(q[1], 0, dh)]; });
+  let keep = ctx; ctx = gc;   // 線の道具（polyline・seg）をこの下地に使う
+  polyline(loc, 'rgba(0,0,0,0.51)', 2.5);
+  polyline(loc, 'rgba(255,255,255,0.59)', 1);
   // sRGB三角形とD65白色点
-  g.stroke(255, 170); g.strokeWeight(1.2); g.noFill();
   let tr = [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]];
-  for (let i = 0; i < 3; i++) {
-    let a = tr[i], b = tr[(i + 1) % 3];
-    g.line(xyPixX(a[0], 0, dw), xyPixY(a[1], 0, dh), xyPixX(b[0], 0, dw), xyPixY(b[1], 0, dh));
-  }
+  polyline(tr.map(function (q) { return [xyPixX(q[0], 0, dw), xyPixY(q[1], 0, dh)]; }), 'rgba(255,255,255,0.67)', 1.2);
   let wx = xyPixX(0.3127, 0, dw), wy = xyPixY(0.3290, 0, dh);
-  g.stroke(255); g.strokeWeight(1.2);
-  g.line(wx - 4, wy, wx + 4, wy); g.line(wx, wy - 4, wx, wy + 4);
+  seg(wx - 4, wy, wx + 4, wy, '#fff', 1.2); seg(wx, wy - 4, wx, wy + 4, '#fff', 1.2);
+  ctx = keep;
   return g;
 }
 
@@ -2666,17 +2723,15 @@ function drawXYDiagram(sorted, cur) {
   let dx = ly0[0], dy = ly0[1], dw = ly0[2], dh = ly0[3];
   let key = dw + 'x' + dh;
   if (!xyBuf || xyBufKey !== key) { xyBuf = buildXYBuffer(dw, dh); xyBufKey = key; }
-  push();
-  image(xyBuf, dx, dy);
+  ctx.drawImage(xyBuf, dx, dy);
   // ループ一周分の軌跡（補間方式の幾何学がここに出る）
-  noFill(); stroke(255, 170); strokeWeight(1.5);
-  beginShape();
+  let path = [];
   for (let k = 0; k <= 120; k++) {
     let c = sampleAt(k / 120 * TWO_PI + 0.0001, sorted);
     let xy = xyFromRgb(c[0], c[1], c[2]);
-    vertex(xyPixX(xy[0], dx, dw), xyPixY(xy[1], dy, dh));
+    path.push([xyPixX(xy[0], dx, dw), xyPixY(xy[1], dy, dh)]);
   }
-  endShape(CLOSE);
+  polyline(path, rgba(255, 255, 255, 170), 1.5);
   // 色点
   for (let i = 0; i < points.length; i++) {
     let p = points[i];
@@ -2684,16 +2739,15 @@ function drawXYDiagram(sorted, cur) {
     let X = xyPixX(xy[0], dx, dw), Y = xyPixY(xy[1], dy, dh);
     let interactive = showXY && !showLumaCheck;
     let msz = (interactive && (i === dragXYIdx || dist(mouseX, mouseY, X, Y) < Math.max(15, hitR * 0.6))) ? 16 : 11;
-    stroke(0, 160); strokeWeight(4); fill(p.r, p.g, p.b); circle(X, Y, msz);
-    stroke(255); strokeWeight(1.5); noFill(); circle(X, Y, msz);
+    ringLine(X, Y, msz, rgba(0, 0, 0, 160), 4); disc(X, Y, msz, rgba(p.r, p.g, p.b));
+    ringLine(X, Y, msz, '#fff', 1.5);
   }
   // 現在再生中の色（動く白リング）
   let xy = xyFromRgb(cur[0], cur[1], cur[2]);
   let X = xyPixX(xy[0], dx, dw), Y = xyPixY(xy[1], dy, dh);
-  stroke(0, 180); strokeWeight(5); noFill(); circle(X, Y, 17);
-  stroke(255); strokeWeight(2.5); circle(X, Y, 17);
+  ringLine(X, Y, 17, rgba(0, 0, 0, 180), 5);
+  ringLine(X, Y, 17, '#fff', 2.5);
   drawOutlinedText('CIE xy 色度図', dx + dw / 2, dy + dh + 12, 12, 230);
-  pop();
 }
 
 function applyResponsive() {
@@ -2709,15 +2763,10 @@ function applyResponsive() {
 }
 
 function addLumaSeg(label, m, parentEl) {
-  let b = createButton(label); b.parent(parentEl);
-  b.mousePressed(function () { setLumaMode(m); });
-  lumaSegBtns[m] = b;
+  lumaSegBtns[m] = el('button', { text: label, parent: parentEl, on: { click: function (ev) { ev.currentTarget.blur(); setLumaMode(m); } } });
 }
 function setLumaSegActive() {
-  for (let k in lumaSegBtns) {
-    if (k === lumaMode) { lumaSegBtns[k].addClass('active'); }
-    else { lumaSegBtns[k].removeClass('active'); }
-  }
+  for (let k in lumaSegBtns) { lumaSegBtns[k].classList.toggle('active', k === lumaMode); }
 }
 function setLumaMode(m) {
   if (m === lumaMode) { return; }
@@ -2728,82 +2777,58 @@ function setLumaMode(m) {
 }
 
 function buildUI() {
-  topBar = createDiv('').class('bar'); topBar.id('topBar');
-  topBar.style('top', '14px'); topBar.style('left', '50%'); topBar.style('transform', 'translateX(-50%)');
-
   // 操作パネル：時間・観察・色の3段をまとめる1枚（リングの下）
-  panelEl = createDiv(''); panelEl.id('panel');
+  panelEl = el('div', { id: 'panel' });
 
   // 時間の段
-  timeBar = createDiv('').class('bar'); timeBar.id('timeBar');
-  durNum = createInput(String(loopDur), 'number'); durNum.parent(timeBar);
-  durNum.attribute('min', '0.5'); durNum.attribute('max', '120'); durNum.attribute('step', '0.5');
-  durNum.input(function () { setDur(float(durNum.value())); });
-  createSpan('秒').parent(timeBar);
-  durSlider = createSlider(0.5, 120, loopDur, 0.5); durSlider.parent(timeBar);
-  durSlider.input(function () { setDur(durSlider.value()); });
-  pauseBtn = createButton(ICON_PAUSE); pauseBtn.parent(timeBar);
-  pauseBtn.mousePressed(togglePause);
-  pauseBtn.attribute('title', '一時停止／再開');
-  revBtn = createButton('\u21bb'); revBtn.parent(timeBar);
-  revBtn.attribute('title', '回転の向きを逆にする'); revBtn.attribute('aria-label', '回転の向きを逆にする');
-  revBtn.style('font-size', '17px'); revBtn.style('padding-top', '4px'); revBtn.style('padding-bottom', '5px');
-  revBtn.mousePressed(function () { setReversed(!reversed); });
+  timeBar = el('div', { id: 'timeBar', cls: 'bar', parent: panelEl });
+  durNum = el('input', { parent: timeBar, attrs: { type: 'number', min: '0.5', max: '120', step: '0.5', value: String(loopDur) },
+    on: { input: function () { setDur(parseFloat(durNum.value)); } } });
+  el('span', { text: '秒', parent: timeBar });
+  durSlider = el('input', { parent: timeBar, attrs: { type: 'range', min: '0.5', max: '120', step: '0.5', value: String(loopDur) },
+    on: { input: function () { setDur(parseFloat(durSlider.value)); } } });
+  pauseBtn = el('button', { html: ICON_PAUSE, title: '一時停止／再開', parent: timeBar, on: { click: function () { pauseBtn.blur(); togglePause(); } } });
+  revBtn = el('button', { text: '\u21bb', title: '回転の向きを逆にする', parent: timeBar,
+    style: { fontSize: '17px', paddingTop: '4px', paddingBottom: '5px' },
+    on: { click: function () { revBtn.blur(); setReversed(!reversed); } } });
   // 小さい枠だけ出る ⋯（観察・色の段を開く／閉じる）
-  let mi = createButton('\u22ef'); mi.parent(timeBar); mi.id('moreInline');
-  mi.attribute('title', '観察・色の設定を開く／閉じる'); mi.attribute('aria-label', '観察・色の設定を開く／閉じる');
-  mi.mousePressed(function () { document.body.classList.toggle('moreOpen'); layout(); });
+  el('button', { id: 'moreInline', text: '\u22ef', title: '観察・色の設定を開く／閉じる', parent: timeBar,
+    on: { click: function (ev) { ev.currentTarget.blur(); document.body.classList.toggle('moreOpen'); layout(); } } });
+
+  // 観察の段
+  viewBar = el('div', { id: 'viewBar', cls: 'bar', parent: panelEl });
+  xyBtn = el('button', { text: 'xy色度図', parent: viewBar, on: { click: function () {
+    xyBtn.blur(); showXY = !showXY; xyBtn.classList.toggle('active', showXY);
+  } } });
+  checkBtn = el('button', { text: '輝度検証', parent: viewBar, on: { click: function () {
+    checkBtn.blur(); showLumaCheck = !showLumaCheck; checkBtn.classList.toggle('active', showLumaCheck);
+  } } });
 
   // 色の段
-  colorBar = createDiv('').class('bar'); colorBar.id('colorBar');
-
-  gainWrap = createSpan(''); gainWrap.parent(colorBar);
-  gainWrap.style('display', 'none'); gainWrap.style('align-items', 'center'); gainWrap.style('gap', '6px');
-  createSpan('HDR輝度').parent(gainWrap);
-  let gs = createSlider(1.0, 4.0, hdrGain, 0.1); gs.parent(gainWrap); gs.style('width', '110px');
-  gs.input(function () { hdrGain = gs.value(); });
-  gainSlider = gs;
-  let lumaWrap = createDiv('').parent(colorBar);
-  lumaWrap.style('display', 'flex'); lumaWrap.style('align-items', 'center'); lumaWrap.style('gap', '8px');
-  createSpan('知覚明度統一').parent(lumaWrap);
-  let segWrap = createDiv('').class('segGroup'); segWrap.parent(lumaWrap);
+  colorBar = el('div', { id: 'colorBar', cls: 'bar', parent: panelEl });
+  gainWrap = el('span', { parent: colorBar, style: { display: 'none', alignItems: 'center', gap: '6px' } });
+  el('span', { text: 'HDR輝度', parent: gainWrap });
+  gainSlider = el('input', { parent: gainWrap, attrs: { type: 'range', min: '1', max: '4', step: '0.1', value: String(hdrGain) },
+    style: { width: '110px' }, on: { input: function () { hdrGain = parseFloat(gainSlider.value); } } });
+  let lumaWrap = el('div', { parent: colorBar, style: { display: 'flex', alignItems: 'center', gap: '8px' } });
+  el('span', { text: '知覚明度統一', parent: lumaWrap });
+  let segWrap = el('div', { cls: 'segGroup', parent: lumaWrap });
   addLumaSeg('最低', 'min', segWrap);
   addLumaSeg('平均', 'avg', segWrap);
   setLumaSegActive();
-
   // 戻る・彩度最大は「明度統一」とは別の独立した操作として分離
-  restoreBtn = createButton('戻る'); restoreBtn.parent(colorBar);
-  restoreBtn.mousePressed(function () {
-    restoreLuma();
-    lumaMode = 'none';
-    setLumaSegActive();
-  });
-  restoreBtn.style('display', 'none');
-  let maxcBtn = createButton('彩度最大'); maxcBtn.parent(colorBar);
-  maxcBtn.mousePressed(function () { equalizeLuma('maxc'); });
+  restoreBtn = el('button', { text: '戻る', parent: colorBar, style: { display: 'none' }, on: { click: function () {
+    restoreBtn.blur(); restoreLuma(); lumaMode = 'none'; setLumaSegActive();
+  } } });
+  el('button', { text: '彩度最大', parent: colorBar, on: { click: function (ev) { ev.currentTarget.blur(); equalizeLuma('maxc'); } } });
 
-  // 観察の段
-  viewBar = createDiv('').class('bar'); viewBar.id('viewBar');
-  xyBtn = createButton('xy色度図'); xyBtn.parent(viewBar);
-  xyBtn.mousePressed(function () {
-    showXY = !showXY;
-    if (showXY) { xyBtn.addClass('active'); } else { xyBtn.removeClass('active'); }
-  });
-  checkBtn = createButton('輝度検証'); checkBtn.parent(viewBar);
-  checkBtn.mousePressed(function () {
-    showLumaCheck = !showLumaCheck;
-    if (showLumaCheck) { checkBtn.addClass('active'); } else { checkBtn.removeClass('active'); }
-  });
-
-  // 上から 時間・観察・色 の順に並べる
-  panelEl.elt.appendChild(timeBar.elt); panelEl.elt.appendChild(viewBar.elt); panelEl.elt.appendChild(colorBar.elt);
   // 段の出し入れ（戻る・HDR輝度の表示など）でパネルの高さが変わったら、リングの大きさを測り直す
   if (window.ResizeObserver) {
     let lastH = 0;
     new ResizeObserver(function () {
-      let h = panelEl.elt.offsetHeight;
+      let h = panelEl.offsetHeight;
       if (h !== lastH && !playMode) { lastH = h; layout(); }
-    }).observe(panelEl.elt);
+    }).observe(panelEl);
   }
 
   buildModeUI(document.body, function (m) { mode = m; updateModeBtns(); });
@@ -2976,6 +3001,9 @@ function updateModeBtns() {
     lab.textContent = name;
   }
 }
+
+// すべての定義が済んでから起動する
+setup();
 </script>
 </body>
 </html>

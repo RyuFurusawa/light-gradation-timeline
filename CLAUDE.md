@@ -33,8 +33,8 @@ CLAUDE.md           このファイル
 
 ## 技術構成
 
-- 単一HTML、ビルドなし。依存は CDN の p5.js 1.9.4 のみ（`https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js`）
-- **ハイブリッド描画**：全画面の色（背景＋中央の基準グレー矩形）は生の WebGPU、UI・リング・色点・xy色度図は p5.js の 2D canvas（z-index で WebGPU canvas の上に重ねる）
+- 単一HTML、ビルドなし、**外部ライブラリなし**（2026-11-27 に p5.js をやめた。理由：色の忠実さは WebGPU／CSS の出力で決まり p5 は関わっていなかった、CDN に届かない教室でも動く、軽い）。描画は Canvas 2D、部品は DOM（`el()` で作る）、入力は Pointer Events（マウスとタッチを同じに扱う、`bindInput()`）、描画の繰り返しは `requestAnimationFrame`。`constrain`・`lerp`・`dist`・`TWO_PI` などの小さな数学関数は冒頭で自前で定義。起動はスクリプトの最後の `setup()`
+- **描画の分担**：全画面の色（背景＋中央の基準グレー矩形）は生の WebGPU か CSS、リング・色点・xy色度図は Canvas 2D の `canvas.ringCanvas`（`cnv`・`ctx`、透明、z-index で WebGPU canvas の上に重ねる）。`width`・`height` は CSS px、`dpr` を掛けた大きさで確保し、毎フレーム `setTransform(dpr…)` してから描く。shadowBlur は座標変換の影響を受けないので `dpr` を掛ける
 - **HDR**：WebGPU `rgba16float` + `toneMapping: { mode: "extended" }` + `colorSpace: 'srgb'`、拡張sRGBエンコード（`encExt`）。背景もグレーも「線形値 × hdrGain」の同一スケール（最大チャンネル正規化はしない）
 - **HDR判定**：`(dynamic-range: high)` メディアクエリでゲートする（WebGPU の configure は SDR ディスプレイでも成功してしまうため）。`change` イベントを監視し `refreshRenderer()` で動的に追従。非HDR時は HDR輝度スライダー（`gainWrap`）を隠す
 - **駆動**：`noLoop()` + `requestAnimationFrame` で、30コマ/秒の刻み（`TICK_MS`）ごとに `redraw()`。描画中の時刻 `frameClock` はその刻みに丸めた絶対時刻（`performance.timeOrigin + rAF の時刻`）で、同じページの枠（iframe）では全部同じ値になる。位相は `clockMs()` 基準（`t0`・`pausedAt` も絶対時刻）。`millis()` は位相に使わない（タップの間隔判定だけ）
@@ -49,7 +49,7 @@ CLAUDE.md           このファイル
   - タッチ（`isCoarse`）：ホバーがないので常に表示。分割中は親が選んだ枠（最後に触れた枠、`active` メッセージの `paneActive`）だけ表示し、ほかはリングだけ。隠れている枠への最初の一触りは枠を選ぶだけで、色点の追加・移動はしない（`tapSwallow`）
   - つかんでいる間は常に表示。針先のつまみは、マウスではリングに近づいたとき（`ringA`）だけ、タッチでは選んでいる枠（`keyA`）だけに出す。ほかは線だけ
   - 見え方の更新（`updateKeyVisibility()`）は `drawPlayhead()` の中で毎フレーム呼ぶ
-- **色の変更**：キーストーンをタップ（マウスはダブルクリック）すると、アプリ内の色選び（`#colorPop`：彩度×明度の面＋色相の帯、HSB）が出る（`openPickerAt()`）。マウスはキーストーンに被らない位置の小さなパネル、タッチは画面の下からせり出すシート（`.sheetMode`、幅いっぱい、`sizePicker()`）。シート中は親の＋と×を隠す（`picker` メッセージ → `.pane.picking`）。シートを開くと、リングをシートの上へ持ち上げる（`computeLift()`・`liftRing()`。大きさは変えず、まるごと入るならシートの上の空きの中央へ、入らなければ編集中のキーストーンがシートの上端から 28px 上に来る所まで。`baseR`・`baseCy` が元の位置で、`sheetT` で少し弾むように動かす）。`isCanvasEvent()` はリングの p5 キャンバス（`mainCanvasElt`）だけを見る（色選びの面も canvas なので、iPhone のタッチの知らせで閉じていた）。パネルではタッチ・マウスの知らせを `stopPropagation` する。隠した `input type=color` をプログラムから開く方式は iPhone で開かなかったので廃止。パネルの外を押すと閉じるだけで、色点の追加はしない
+- **色の変更**：キーストーンをタップ（マウスはダブルクリック）すると、アプリ内の色選び（`#colorPop`：彩度×明度の面＋色相の帯、HSB）が出る（`openPickerAt()`）。マウスはキーストーンに被らない位置の小さなパネル、タッチは画面の下からせり出すシート（`.sheetMode`、幅いっぱい、`sizePicker()`）。シート中は親の＋と×を隠す（`picker` メッセージ → `.pane.picking`）。シートを開くと、リングをシートの上へ持ち上げる（`computeLift()`・`liftRing()`。大きさは変えず、まるごと入るならシートの上の空きの中央へ、入らなければ編集中のキーストーンがシートの上端から 28px 上に来る所まで。`baseR`・`baseCy` が元の位置で、`sheetT` で少し弾むように動かす）。`isCanvasEvent()` はリングのキャンバス（`mainCanvasElt`）だけを見る（色選びの面も canvas なので、iPhone のタッチの知らせで閉じていた）。パネルではタッチ・マウスの知らせを `stopPropagation` する。隠した `input type=color` をプログラムから開く方式は iPhone で開かなかったので廃止。パネルの外を押すと閉じるだけで、色点の追加はしない
 - **アイコン**：一時停止・再生は SVG（`ICON_PAUSE`・`ICON_PLAY`）。⏸ ▶ の文字は iPhone で絵文字になるので使わない
 - **回転方向の逆転**：時間バーの ↻ ボタン（`revBtn`、タイムラインごと）。`reversed` のとき `getPhase()` が逆向きに進む。位相を直接いじる箇所（針のドラッグ、秒数変更、複製）は必ず `setPhase(ph)` を通す（`t0` を直接計算すると逆転時に位置が飛ぶ）
 - **補間8方式**（`MODE_LIST`）：`step` ステップ切替／`hsb` HSB色相回転／`rgbLight` RGB中間混色（光量平均）／`rgbValue` RGB中間混色（画素値平均）／`oklch` OKLab 色相回転／`oklabLin` OKLab 中間混色／`cielch` CIELab 色相回転／`cielabLin` CIELab 中間混色。**デフォルトは `oklabLin`**
@@ -62,7 +62,7 @@ CLAUDE.md           このファイル
 - **情報パネル**：右上の丸iボタン。操作説明と色変換の注意事項
 
 - **スリープ防止**：Screen Wake Lock。読み込み時に要求し、拒否されたら最初の操作（pointerdown／keydown）で取り直す。タブ復帰（`visibilitychange`）でも取り直す。状態は `wakeState`（pending／on／unsupported／failed）で、情報パネルの `#wakeStatus` に出る。非対応、または操作起点の要求が拒否されたときだけ、暗転オーバーレイ `#wakeNotice` を一度出す
-- **PWA**：`manifest.webmanifest` ＋ `sw.js`。自サイトのファイルはネットワーク優先（更新を即反映）、届かないときだけキャッシュ。HTTP キャッシュも `no-cache` で毎回確かめる（親ページと枠の iframe で版が食い違うと、やり取りの形が合わず壊れるため。実際に古い iframe が残った）。p5.js（CDN）はキャッシュ優先。`sw.js` のキャッシュ対象を変えたら `CACHE` の版名を上げる
+- **PWA**：`manifest.webmanifest` ＋ `sw.js`。自サイトのファイルはネットワーク優先（更新を即反映）、届かないときだけキャッシュ。HTTP キャッシュも `no-cache` で毎回確かめる（親ページと枠の iframe で版が食い違うと、やり取りの形が合わず壊れるため。実際に古い iframe が残った）。`sw.js` のキャッシュ対象を変えたら `CACHE` の版名を上げる
 
 - **画面分割**：`index.html` は2つの役割で動く。通常の起動は**親（`IS_HOST`）**で、タイムラインは持たず、`#panes` に iframe（`index.html?pane=1`＝**子、`IS_PANE`**）を並べる。起動時に子を1つ作る
   - **分割は再帰的な木**（`hostRoot`）：葉＝枠（`{pane}`）、節＝二分割（`{dir:'row'|'col', a, b, ratio}`）。各枠の四辺の＋（`.splitBtn.sL/sR/sT/sB`）を押すと、**その枠だけ**を二分して押した側に複製を置く（`splitPane`）。ほかの枠の大きさは変わらない。×で閉じると二分の相手が領域を引き継ぐ（`removePane`）
@@ -84,9 +84,9 @@ CLAUDE.md           このファイル
     - **T字の交点（中間混色の4方式だけ）**：3枠の点は「対角が、その先へ続いている枠そのもの」の4枠の角と同じ式でつながる。親は、片方の隣だけが角で終わる角も `diag` にする（対角＝続いている枠）。続いている側の枠（辺に2つの隣が接する枠）には、交点の一覧 `pane.tj[辺]`＝[位置, 手前の隣の辺に沿った長さ, 奥の隣の長さ]（この枠の辺の長さで割った値）を `blend` の `tj` で渡す。子は交点の左右に `cornerLut(自分, 自分, 手前, 奥)`・`cornerLut(自分, 自分, 奥, 手前)` の面を作り（`edgeLuts()` の `t.tj`）、交点からの距離を**隣の枠の帯の幅で**正規化した k（隣側の k と同じ式）が 1 未満の所ではその面を使う（`side()`・WGSL の `sideCol`）。交点のある辺は区間をぼかさない。面の表はストレージバッファの角の4枚の後ろ（辺ごとに `EDGE_MAXS`−1 個×2面）。交点の点は (2×自分＋手前＋奥)/4
     - HDR は WGSL（`sideCol`・`lutAt`・fs）、非HDR は JS の `edgeColorAt` で 96×96 の `#blend2d` キャンバスに描いて全面に引き伸ばす。**両者は同じ式なので、片方を変えたら両方直す**。GPU の出力を読み戻して JS と全画素で照合する手順で確かめられる（差は半精度の誤差 0.002 以内）
     - 帯の中の位置は `edgeEase(k) = 2k − k²` でなだらかに終わらせる（帯の端で傾き0＝線に見えない。境界では左右対称なので傾きまでつながる）。WGSL にも同じ式
-  - 子は resize イベントが遅れることがあるので `draw()` で実寸と照合している。寸法は p5 の `windowWidth` ではなく `window.innerWidth` を使う
+  - 子は resize イベントが遅れることがあるので `draw()` で実寸と照合している。寸法は `window.innerWidth` を使う
   - Wake Lock とサービスワーカーの登録は親だけ。子は操作を `gesture` で伝え、状態表示だけ受け取る
-  - 親でも p5 の `setup`／`draw`／マウス・キーのハンドラは呼ばれるので、各関数の先頭で `IS_HOST` を弾いている。ハンドラを足すときも同様に
+  - 親も同じ `setup()` から始まり、`IS_HOST` なら `buildHost()` だけをして戻る（リングのキャンバスも入力も作らない）
   - 検証用に URL へ `?nohdr=1` を付けると、HDR を使わず P3／sRGB の経路で描く（子にも引き継がれる）
 
 ## UIレイアウト（現行仕様）
@@ -104,12 +104,12 @@ CLAUDE.md           このファイル
 
 1. **範囲削除の巻き添え**：ハンバーガー撤去時、直後の `fsBtn` 生成コードまで消した。ブロックを削除するときは前後を必ず読む
 2. **編集の空振り**：同じ処理でも1行／複数行の書式違いがあり、置換が当たらないことがあった。編集前に現物を読み、編集後に結果を確認する
-3. **p5 の `show()` はインライン `display` を付ける**：CSS と競合してレイアウトが崩れる。`b.elt.style.display = ''` でクラス制御に戻す
+3. **インライン `display` は CSS と競合する**：表示の出し入れはなるべくクラス（`body.play` など）で行う
 4. **フルスクリーン解除は非同期**：解除直後は幅がずれる。`setTimeout` 60ms と 250ms でレイアウトを再計算している
-5. **p5 組み込み名との衝突**：自作関数に `norm` などを使わない（`wrapAng` に改名済み）
-6. **p5 のマウスイベントは全域で発火**：UIクリックがキャンバス操作に漏れないよう `isCanvasEvent(e.target)` でガードする
+5. **冒頭で定義した小さな数学関数（`min`・`max`・`sin` など）と同じ名前の変数をトップレベルで作らない**
+6. **入力はリングのキャンバスにだけ付けている**（`bindInput()`）。ほかの canvas 要素（色選びの面など）への操作をリングの操作と取り違えないよう、`isCanvasEvent()` で `mainCanvasElt` かを確かめる
 7. **HDR に 8bit unorm は使えない**：1.0 で頭打ちになる。`rgba16float` 必須
-8. **WebGPU canvas の重なり順**：z-index 未指定だと WebGPU canvas が p5 canvas を覆う（gpu z:0、p5 z:1）
+8. **WebGPU canvas の重なり順**：z-index 未指定だと WebGPU canvas がリングのキャンバスを覆う（gpu z:0、ringCanvas z:1）
 
 ## 検証の進め方（必須）
 
@@ -122,7 +122,7 @@ python3 -c "import re;js=re.findall(r'<script>(.*?)</script>',open('index.html')
 node --check /tmp/x.js
 ```
 
-実描画の確認（Playwright）。`python3 -m http.server 8000` で配信してから実行する。CDN に届かない環境では `npm install p5@1.9.4` してローカルの `p5.min.js` に差し替えたテスト用コピーで検証する（本体の CDN 参照は変えない）。
+実描画の確認（Playwright）。`python3 -m http.server 8000` で配信してから実行する。外部の読み込みはないので、オフラインでもそのまま検証できる。
 
 ```python
 # verify.py — 各UIの表示位置とJSエラーを、デスクトップ幅とスマホ幅で出す

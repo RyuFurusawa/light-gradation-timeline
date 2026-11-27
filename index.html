@@ -310,6 +310,11 @@
     backdrop-filter: none; -webkit-backdrop-filter: none;
   }
   #globalPop > .bar + .bar { border-top: 1px solid rgba(255,255,255,0.09); }
+  #globalPop .lumaInfo { width: 30px; height: 30px; min-height: 0; padding: 0; border-radius: 50%; font-style: italic; font-weight: 700; font-family: Georgia, serif; }
+  #globalPop .lumaHelp { display: none; max-width: 400px; padding: 4px 2px 10px; border-top: 1px solid rgba(255,255,255,0.09); font-size: 12.5px; line-height: 1.65; color: #d8d8d8; }
+  #globalPop .lumaHelp.open { display: block; }
+  #globalPop .lumaHelp p { margin: 8px 0 0; }
+  #globalPop .lumaHelp b { color: #fff; }
   /* 子ページ側：分割中は色の段（HDR輝度・明度統一）を親の「全体の色」に任せる */
   body.paneMulti #colorBar { display: none !important; }
   /* ---- 子ページ側：共通バーがあるとき（shared）は、そこに任せるボタンを隠す ---- */
@@ -2082,6 +2087,18 @@ function buildGlobalUI() {
   });
   hostLumaBtns.maxc = el('button', { text: '彩度最大', parent: lr, on: { click: function (ev) { ev.currentTarget.blur(); hostApplyLuma('maxc'); } } });
   hostRestoreBtn = el('button', { text: '戻る', parent: lr, style: { display: 'none' }, on: { click: function (ev) { ev.currentTarget.blur(); hostApplyLuma('none'); } } });
+  // 明度統一の方針の説明（i で開閉）
+  let help = el('div', { cls: 'lumaHelp', parent: globalPop, html:
+    '<p><b>最低</b>：全部のタイムラインの色点のうち、いちばん暗い色の明度（OKLab の L）に、すべての色をそろえます。</p>' +
+    '<p><b>平均</b>：全部の色点の明度の平均に、すべての色をそろえます。</p>' +
+    '<p>どちらも色相はそのままで、明度だけを動かします。明度を動かすと画面に出せる色の範囲（sRGB）からはみ出す色は、色相を保ったまま彩度を下げて収めます（とくに明るくする側の青など）。</p>' +
+    '<p><b>彩度最大</b>：明度と色相はそのままで、彩度だけを出せる上限まで上げます。</p>' +
+    '<p>どのボタンも、明度をそろえる前の<b>元の色</b>から毎回計算し直します（今の色に重ねてはかけません）。そのため「最低」のあとに「平均」を押すと、元の色の平均にそろいます。<b>戻る</b>で元の色に戻ります。</p>' });
+  let infoB = el('button', { text: 'i', cls: 'lumaInfo', parent: lr, title: '明度統一の方針を表示する', on: { click: function (ev) {
+    ev.currentTarget.blur();
+    let open = !help.classList.contains('open');
+    help.classList.toggle('open', open); infoB.classList.toggle('active', open);
+  } } });
   globalBtn.addEventListener('click', function () {
     globalBtn.blur();
     let open = !globalPop.classList.contains('open');

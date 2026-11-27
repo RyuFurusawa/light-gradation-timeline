@@ -18,6 +18,8 @@
   #stage { position: fixed; inset: 0; }
   /* HDRレンダラ用キャンバス（背景を塗る）。CSSレンダラ時は透明のまま */
   #gpu { position: fixed; inset: 0; width: 100%; height: 100%; display: none; z-index: 0; }
+  /* 非HDR表示のときの境界グラデーション（小さな画像を全面に引き伸ばす） */
+  #blend2d { position: fixed; inset: 0; width: 100%; height: 100%; display: none; z-index: 0; }
   /* UI・リングを描くp5キャンバスは透明で最前面手前に重ねる */
   .bar {
     position: absolute; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
@@ -175,27 +177,47 @@
   }
   #wakeNotice .card b { color: #fff; }
   #wakeNotice .card .closeHint { display: block; margin-top: 10px; font-size: 12px; color: rgba(255,233,200,0.6); text-align: center; }
-  /* ---- 画面分割（親ページ）：タイムラインを iframe で横に並べる ---- */
-  #panes { position: fixed; inset: 0; display: flex; background: #000; }
-  #panes .pane { position: relative; flex: 1 1 0; min-width: 0; height: 100%; }
+  /* ---- 画面分割（親ページ）：タイムラインを iframe で並べる。
+     枠は分割の木（hostRoot）から計算した矩形に絶対配置する（iframe は DOM 上で移動すると再読み込みされるため、入れ子にしない） ---- */
+  #panes { position: fixed; inset: 0; background: #000; overflow: hidden; }
+  #panes .pane { position: absolute; overflow: hidden; }
   #panes iframe { display: block; width: 100%; height: 100%; border: 0; background: #000; }
   .splitBtn, .paneClose {
-    position: fixed; z-index: 25; border-radius: 50%; padding: 0;
-    background: rgba(15,15,18,0.55); backdrop-filter: blur(10px);
+    position: absolute; z-index: 25; padding: 0;
+    background: rgba(15,15,18,0.5); backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.28); color: #fff;
+    border: 1px solid rgba(255,255,255,0.26); color: #fff;
     font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; line-height: 1;
     cursor: pointer; box-shadow: 0 4px 18px rgba(0,0,0,0.3);
   }
-  .splitBtn:hover, .paneClose:hover { background: rgba(255,255,255,0.22); }
-  /* ＋は画面の縁に貼りつくタブ形（細いペインでもリングに重ならないよう幅を抑える） */
-  .splitBtn { top: 50%; transform: translateY(-50%); width: 28px; height: 64px; font-size: 22px; font-weight: 300; }
-  #splitLeft { left: 0; border-radius: 0 14px 14px 0; border-left: 0; }
-  #splitRight { right: 0; border-radius: 14px 0 0 14px; border-right: 0; }
-  .paneClose { position: absolute; top: 62px; left: 12px; width: 32px; height: 32px; font-size: 17px; display: none; }
+  .splitBtn:hover, .paneClose:hover { background: rgba(255,255,255,0.3); }
+  /* ＋は各枠の四辺の中央に貼りつくタブ。押した側に、その枠を二分して複製を置く */
+  .splitBtn { font-size: 18px; font-weight: 300; opacity: 0.75; }
+  .splitBtn:hover { opacity: 1; }
+  .splitBtn.sL, .splitBtn.sR { top: 50%; transform: translateY(-50%); width: 22px; height: 56px; }
+  .splitBtn.sT, .splitBtn.sB { left: 50%; transform: translateX(-50%); width: 56px; height: 20px; }
+  .splitBtn.sL { left: 0; border-radius: 0 12px 12px 0; border-left: 0; }
+  .splitBtn.sR { right: 0; border-radius: 12px 0 0 12px; border-right: 0; }
+  .splitBtn.sT { top: 0; border-radius: 0 0 12px 12px; border-top: 0; }
+  .splitBtn.sB { bottom: 0; border-radius: 12px 12px 0 0; border-bottom: 0; }
+  .paneClose { top: 26px; left: 12px; width: 32px; height: 32px; border-radius: 50%; font-size: 17px; display: none; }
+  body.multi .paneClose { display: block; }
+  body.playing .splitBtn, body.playing .paneClose { display: none; }
+  /* 分割の境界：ドラッグで比率を変える（ダブルクリックで半々に戻す）。つまみは境界の1/4の位置（中央は＋が使う） */
+  .paneDivider { position: fixed; z-index: 24; touch-action: none; }
+  .paneDivider.dv { cursor: col-resize; }
+  .paneDivider.dh { cursor: row-resize; }
+  .paneDivider::after {
+    content: ''; position: absolute; border-radius: 2px;
+    background: rgba(255,255,255,0.6); box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+  }
+  .paneDivider.dv::after { left: 7px; top: 25%; width: 4px; height: 52px; transform: translateY(-50%); }
+  .paneDivider.dh::after { top: 7px; left: 25%; height: 4px; width: 52px; transform: translateX(-50%); }
+  .paneDivider:hover::after, .paneDivider.drag::after { background: #fff; }
+  body.playing .paneDivider { display: none; }
   /* 分割中の共通バー（親）：補間方式・フルスクリーン・境界グラデーション・ヘルプを全タイムライン共通で1つずつ */
   #hostBar {
-    position: fixed; top: 10px; left: 0; right: 0; margin: 0 auto; width: max-content; z-index: 25;
+    position: fixed; top: 26px; left: 0; right: 0; margin: 0 auto; width: max-content; z-index: 26;
     display: none; align-items: center; justify-content: center; gap: 8px;
     flex-wrap: wrap; max-width: 96vw; white-space: nowrap;
   }
@@ -259,6 +281,7 @@
 </head>
 <body>
 <canvas id="gpu"></canvas>
+<canvas id="blend2d" width="96" height="96"></canvas>
 <div id="errbox"></div>
 <script>
 /* =========================================================
@@ -284,7 +307,13 @@ let gainSlider = null;
 let reversed = false, revBtn = null;       // 回転（読み取り）方向の逆転。false＝時計回り
 let sharedUI = false, moreBtn = null;      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
 // 境界グラデーション。子：隣の現在色（線形×ゲイン）を受け取り、枠の端へ向けて混ぜる
-let blendOn = false, blendWidth = 1, nbLeft = null, nbRight = null, hasLeft = false, hasRight = false;
+// nb[側] ＝ その辺に接する隣の枠の並び。各要素 { a0, a1：辺の上での区間（0..1）, c：現在色 }
+let blendOn = false, blendWidth = 1, nb = { L: [], R: [], T: [], B: [] };
+// 4枠が集まる角：cornerOn[角] ＝ その角に4枠が集まっているか、diag[角] ＝ 対角の枠の現在色
+let cornerOn = { TL: false, TR: false, BL: false, BR: false }, diag = { TL: null, TR: null, BL: null, BR: null };
+let topInset = 0;                          // 子：上端に親の共通バーがあるとき、そのぶん下げる量
+let hostRoot = null, hostDividers = [];    // 親：分割の木（葉＝枠、節＝左右または上下の二分割と比率）
+const NO_HDR = /[?&]nohdr\b/.test(location.search);   // 検証用：HDRを使わず P3／sRGB の経路で描く
 let hostBar = null, blendBtn = null;
 
 let points = [];
@@ -391,11 +420,20 @@ function showErr(err) {
   b.textContent = 'エラー: ' + (err && err.message ? err.message : String(err)) + '\n' + (err && err.stack ? err.stack.split('\n')[1] : '');
 }
 
-function isCompact() { return sharedUI && window.innerWidth <= 820; }
+// 簡略表示にする条件：分割中で、枠が細いか低いとき
+function isCompact() { return sharedUI && (window.innerWidth <= 820 || window.innerHeight <= 700); }
+// 簡略表示の時間バーの上端。上辺の＋タブ（20px）と共通バーを避け、細い枠では左上の×の下へ逃がす
+function compactTimeTop() { return topInset + 26 + (width < 320 ? 40 : 0); }
 function layout() {
   cx = width / 2; cy = height / 2;
-  // 簡略表示（分割中の細い枠）はUIが少ないぶん、リングを枠の幅いっぱい近くまで大きくする
-  R = isCompact() ? min(width * 0.38, height * 0.30) : min(width, height) * 0.30;
+  if (isCompact()) {
+    // 時間バーの下から「⋯」の上までに、針のノブ（R+26）ごと収まる最大のリングを置く
+    let A = compactTimeTop() + 48 + 34, B = height - 96;
+    R = Math.max(30, Math.min(width * 0.38, (B - A) / 2));
+    cy = Math.max(A + R, (A + B) / 2);
+  } else {
+    R = min(width, height) * 0.30;
+  }
   placeBars();
 }
 
@@ -411,14 +449,13 @@ function placeBars() {
 
   // 簡略表示：上に秒数と一時停止、サークルの下に「⋯」。開いたときだけ観察トグルと色設定を出す
   if (document.body.classList.contains('compact')) {
-    // 左上の×（親が置く、上端から62〜94px）の下に置く。細い枠でも×と重ならない
-    timeBar.elt.style.top = '102px'; timeBar.elt.style.bottom = 'auto';
+    timeBar.elt.style.top = compactTimeTop() + 'px'; timeBar.elt.style.bottom = 'auto';
     let my = Math.round(cy + R + 36);
     if (moreBtn) { moreBtn.style.top = my + 'px'; }
-    // 開いたパネルは下端から積む（色設定の上に観察トグル）
-    colorBar.elt.style.top = 'auto'; colorBar.elt.style.bottom = '10px';
+    // 開いたパネルは下端から積む（色設定の上に観察トグル）。下辺の＋タブのぶん空ける
+    colorBar.elt.style.top = 'auto'; colorBar.elt.style.bottom = '26px';
     let cH2 = colorBar.elt.offsetHeight || 0, vH2 = viewBar.elt.offsetHeight || 0;
-    viewBar.elt.style.top = Math.round(height - 10 - cH2 - 8 - vH2) + 'px'; viewBar.elt.style.bottom = 'auto';
+    viewBar.elt.style.top = Math.round(height - 26 - cH2 - 8 - vH2) + 'px'; viewBar.elt.style.bottom = 'auto';
     return;
   }
 
@@ -429,7 +466,7 @@ function placeBars() {
     tEl.style.top = '70px';
   } else {
     // 分割中は上端に親の共通バーがあるので、その下に置く
-    tEl.style.top = Math.max(sharedUI ? 64 : 12, Math.round(topGap / 2 - tH / 2)) + 'px';
+    tEl.style.top = Math.max(sharedUI ? topInset + 26 : 12, Math.round(topGap / 2 - tH / 2)) + 'px';
   }
   tEl.style.bottom = 'auto';
 
@@ -454,10 +491,10 @@ function placeBars() {
   let cH = cEl.offsetHeight || 50;
   if (narrow) {
     cEl.style.top = 'auto';
-    cEl.style.bottom = '10px';
+    cEl.style.bottom = '26px';   // 下辺の＋タブのぶん空ける
     if (fsBtn) {
       let fH = fsBtn.offsetHeight || 40;
-      let mid = (cy + R + (height - cH - 10)) / 2;   // サークル下端と色設定の中間
+      let mid = (cy + R + (height - cH - 26)) / 2;   // サークル下端と色設定の中間
       fsBtn.style.top = Math.round(mid - fH / 2) + 'px';
       fsBtn.style.bottom = 'auto';
     }
@@ -541,6 +578,7 @@ function draw() {
   if (showLumaCheck) { drawLumaCheck(); }
   if (showXY) { drawXYDiagram(sorted, cur); }
 
+  if (sharedUI) { return; }   // 分割中は診断表示を省く（枠が小さいとUIに重なる）
   let diag = 'frame ' + frameCount + ' / t ' + nf(millis()/1000, 1, 1) + 's / ' + renderer.kind + (renderer.kind === 'HDR' ? ('  gain ' + nf(hdrGain, 1, 2)) : '');
   push(); textAlign(RIGHT, BOTTOM); textSize(11);
   fill(0, 140); noStroke(); text(diag, width - 11, height - 9);
@@ -715,29 +753,163 @@ function hexToRgb(hx) {
 function hex2(n) { let s = Math.round(constrain(n, 0, 255)).toString(16); return s.length < 2 ? '0' + s : s; }
 
 /* ---------------- 境界グラデーション ----------------
-   隣り合う枠の現在色どうしを、選択中の補間方式（全枠共通）で空間的につなぐ。
+   隣り合う枠の現在色どうしを、選択中の補間方式（全枠共通）で空間的につなぐ。左右にも上下にも働く。
    枠の中央＝自分の色（補間の f=0）、境界＝ちょうど中間（f=0.5）、その先は隣の枠が引き継ぐ。
    両側の枠が同じ2色・同じ方式で計算するので、境界で色が一致する（隣の色は1フレーム遅れで届く）。
    幅 blendWidth=1 で枠の中央まで、小さいほど境界付近だけ。ステップ切替は補間しないので、境界は切り替わったまま。
-   方式ごとの道筋は曲がるので、EDGE_N 区間の表（線形×ゲイン）にしてレンダラへ渡し、表のあいだは光量で線形補間する */
+   方式ごとの道筋は曲がるので、EDGE_N 区間の表（線形×ゲイン）にしてレンダラへ渡し、表のあいだは光量で線形補間する。
+
+   T字の境界（1つの辺に複数の枠が接する）：辺の区間ごとに相手を替え、相手ごとの表を持つ。
+   区間の切り替わり目は、境界から離れるほど幅広くぼかす（ぼかしの半幅＝境界からの距離、45°の扇形）。
+   境界の上ではぼかし幅0なので、各区間で相手の枠と色が一致する。3つの枠が出会う1点だけは不連続になる */
 const EDGE_N = 32;
+const EDGE_MAXS = 8;                     // 1辺あたりの相手の上限（超えた辺はつながない）
+const EDGE_SIDES = ['L', 'R', 'T', 'B'];
+const EDGE_FAR = 1e6;                    // 辺の両端の区間は外側へ無限に延ばす（端でぼかさない）
+const EDGE_CN = 33;                      // 角の面の表の一辺の点数
+const EDGE_CORNERS = ['TL', 'TR', 'BL', 'BR'];   // 並び順＝ (右なら+1) + (下なら+2)
 function outGain() { return (renderer && renderer.kind === 'HDR') ? hdrGain : 1; }
-// 境界（j=0）から帯の終わり（j=EDGE_N、自分の色）までの表。隣がいない／未着なら null
-// side：'L'＝自分の左の境界（隣は左）、'R'＝右の境界。
-// 補間は必ず「左の枠の色 → 右の枠の色」の向きで評価する（色相回転は補色どうしだと回る向きが
+
+/* 4枠が集まる角（中間混色の4方式だけ）
+   中間混色はその色空間での直線補間なので、角に集まる4色を同じ空間で双線形に混ぜる面を張れる。
+   自分 P・左右の隣 H・上下の隣 V・対角 D、kx, ky（0＝境界、1＝帯の外）で
+     c = P + (1-kx)/2 (H-P) + (1-ky)/2 (V-P) + (1-kx)(1-ky)/4 (D-H-V+P)
+   角（0,0）は4色の平均、左右の境界上（kx=0）は P と H の中点から伸びる線＝隣と同じ、
+   帯の外側（kx=1 や ky=1）は1辺だけの表と同じになる。色相回転系は回る向きが4色で決まらないので使わない */
+const LIN_SPACES = {
+  rgbValue:  [function (c) { return [c.r, c.g, c.b]; }, function (v) { return v; }],
+  rgbLight:  [function (c) { return [s2l(c.r / 255), s2l(c.g / 255), s2l(c.b / 255)]; },
+              function (v) { return [l2s(v[0]) * 255, l2s(v[1]) * 255, l2s(v[2]) * 255]; }],
+  oklabLin:  [function (c) { return rgb2oklab(c.r, c.g, c.b); }, function (v) { return oklab2rgb(v[0], v[1], v[2]); }],
+  cielabLin: [function (c) { return rgb2lab(c.r, c.g, c.b); }, function (v) { return lab2rgb(v[0], v[1], v[2]); }]
+};
+// 角の面の表（線形×ゲイン）。並びは [ky の段][kx の列]
+function cornerLut(P, H, V, D, gP) {
+  let sp = LIN_SPACES[mode], f = sp[0];
+  let p = f(P), h = f(H), v = f(V), d = f(D);
+  let out = new Float32Array(EDGE_CN * EDGE_CN * 4), k = 0;
+  for (let jy = 0; jy < EDGE_CN; jy++) {
+    let ay = (1 - jy / (EDGE_CN - 1)) / 2;
+    for (let jx = 0; jx < EDGE_CN; jx++) {
+      let ax = (1 - jx / (EDGE_CN - 1)) / 2, axy = ax * ay;
+      let q = [0, 1, 2].map(function (i) { return p[i] + ax * (h[i] - p[i]) + ay * (v[i] - p[i]) + axy * (d[i] - h[i] - v[i] + p[i]); });
+      let g = gP + ax * (H.gain - gP) + ay * (V.gain - gP) + axy * (D.gain - H.gain - V.gain + gP);
+      let c = sp[1](q);
+      out[k++] = s2l(constrain(c[0], 0, 255) / 255) * g;
+      out[k++] = s2l(constrain(c[1], 0, 255) / 255) * g;
+      out[k++] = s2l(constrain(c[2], 0, 255) / 255) * g;
+      out[k++] = 1;
+    }
+  }
+  return out;
+}
+// 境界（j=0）から帯の終わり（j=EDGE_N、自分の色）までの表。
+// 補間は必ず「左（上）の枠の色 → 右（下）の枠の色」の向きで評価する（色相回転は補色どうしだと回る向きが
 // 引数の順で変わるため、両側の枠で同じ向きにそろえないと境界で食い違う）
-function edgeLut(rgb, nb, side) {
-  if (!blendOn || !nb || mode === 'step') { return null; }
+function edgeLut(rgb, o, side) {
   let me = { r: rgb[0], g: rgb[1], b: rgb[2] }, g0 = outGain();
+  let fwd = (side === 'R' || side === 'B');
   let out = new Float32Array((EDGE_N + 1) * 4);
   for (let j = 0; j <= EDGE_N; j++) {
     let f = 0.5 * (1 - j / EDGE_N);
-    let c = (side === 'R') ? interp(me, nb, f) : interp(nb, me, 1 - f);
-    let g = g0 + (nb.gain - g0) * f;   // ゲインが枠ごとに違っても境界で一致させる
+    let c = fwd ? interp(me, o, f) : interp(o, me, 1 - f);
+    let g = g0 + (o.gain - g0) * f;   // ゲインが枠ごとに違っても境界で一致させる
     out[j * 4]     = s2l(constrain(c[0], 0, 255) / 255) * g;
     out[j * 4 + 1] = s2l(constrain(c[1], 0, 255) / 255) * g;
     out[j * 4 + 2] = s2l(constrain(c[2], 0, 255) / 255) * g;
     out[j * 4 + 3] = 1;
+  }
+  return out;
+}
+// 各辺の区間の並び [{ a0, a1, lut }]。色の届いた区間だけを詰め、両端の区間は外へ延ばす。
+// 何もつながないときは null
+function edgeLuts(rgb) {
+  if (!blendOn || mode === 'step') { return null; }
+  let t = {}, any = false;
+  EDGE_SIDES.forEach(function (k) {
+    let list = [];
+    nb[k].forEach(function (sg) { if (sg.c) { list.push({ a0: sg.a0, a1: sg.a1, lut: edgeLut(rgb, sg.c, k) }); } });
+    if (list.length > 0) {
+      list[0].a0 = -EDGE_FAR; list[list.length - 1].a1 = EDGE_FAR;
+      any = true;
+    }
+    t[k] = list;
+  });
+  // 4枠が集まる角の面。左右の隣＝その辺の角側の端の区間、上下の隣も同じ
+  t.corners = {};
+  if (any && LIN_SPACES[mode]) {
+    let me = { r: rgb[0], g: rgb[1], b: rgb[2] };
+    EDGE_CORNERS.forEach(function (c) {
+      if (!cornerOn[c] || !diag[c]) { return; }
+      let hl = nb[c[1]], vl = nb[c[0]];
+      let hs = (c[0] === 'T') ? hl[0] : hl[hl.length - 1];
+      let vs = (c[1] === 'L') ? vl[0] : vl[vl.length - 1];
+      if (!hs || !vs || !hs.c || !vs.c) { return; }
+      t.corners[c] = cornerLut(me, hs.c, vs.c, diag[c], outGain());
+    });
+  }
+  return any ? t : null;
+}
+// 区間 [a0, a1] の重み。pos は辺に沿った位置（0..1）、h はぼかしの半幅（同じ単位）。
+// 隣り合う区間の重みの和は 1 になる。WGSL 側にも同じ式がある
+function edgeSegW(pos, a0, a1, h) {
+  return constrain((pos - a0 + h) / (2 * h), 0, 1) - constrain((pos - a1 + h) / (2 * h), 0, 1);
+}
+// 左右と上下の両方が効く隅の合成の重み。kx, ky は 0＝境界、1＝帯の外。
+// 左右の境界上（kx=0）では左右の表だけ、上下の境界上では上下の表だけになる（＝どの境界でも隣と一致する）。
+// WGSL 側にも同じ式がある
+function edgeWeights(kx, ky) {
+  let h = (1 - kx) * ky, v = (1 - ky) * kx, d = h + v;
+  return d > 1e-5 ? [h / d, v / d] : [0.5, 0.5];
+}
+// 非HDR用：枠内の位置 (x,y)（0..1）の色（線形）を表から求める。W, H は枠の画素数。WGSL の fs と同じ計算
+function edgeColorAt(x, y, self, luts, W, H) {
+  function at(t, k) {
+    let p = k * EDGE_N, i0 = Math.min(Math.floor(p), EDGE_N - 1), f = p - i0, a = i0 * 4, b = a + 4;
+    return [t[a] + (t[b] - t[a]) * f, t[a+1] + (t[b+1] - t[a+1]) * f, t[a+2] + (t[b+2] - t[a+2]) * f];
+  }
+  // 辺の区間を重みで混ぜた色。区間がなければ null
+  function side(list, k, pos, h) {
+    if (!list || list.length === 0) { return null; }
+    let acc = [0, 0, 0], ws = 0;
+    for (let i = 0; i < list.length; i++) {
+      let w = edgeSegW(pos, list[i].a0, list[i].a1, h);
+      if (w > 0) { let c = at(list[i].lut, k); acc[0] += c[0] * w; acc[1] += c[1] * w; acc[2] += c[2] * w; ws += w; }
+    }
+    return ws > 1e-6 ? [acc[0] / ws, acc[1] / ws, acc[2] / ws] : null;
+  }
+  let ex = Math.min(x, 1 - x), ey = Math.min(y, 1 - y);
+  let kx = constrain(ex * 2 / blendWidth, 0, 1), ky = constrain(ey * 2 / blendWidth, 0, 1);
+  // ぼかしの半幅：境界からの距離（画素）を、辺に沿った長さで割る
+  let ch = side(x > 0.5 ? luts.R : luts.L, kx, y, Math.max(ex * W / H, 1e-6));
+  let cv = side(y > 0.5 ? luts.B : luts.T, ky, x, Math.max(ey * H / W, 1e-6));
+  if (!ch && !cv) { return self; }
+  let w = (ch && cv) ? edgeWeights(kx, ky) : [1, 1];
+  let out = [self[0], self[1], self[2]];
+  for (let i = 0; i < 3; i++) {
+    if (ch) { out[i] += (ch[i] - self[i]) * w[0]; }
+    if (cv) { out[i] += (cv[i] - self[i]) * w[1]; }
+  }
+  // 4枠が集まる角：角側の端の区間に入っているぶんだけ（重み wH・wV）、角の面に置き換える
+  let ck = (y > 0.5 ? 'B' : 'T') + (x > 0.5 ? 'R' : 'L');
+  let cl = luts.corners && luts.corners[ck];
+  if (cl && ch && cv) {
+    let hl = x > 0.5 ? luts.R : luts.L, vl = y > 0.5 ? luts.B : luts.T;
+    let hs = y > 0.5 ? hl[hl.length - 1] : hl[0], vs = x > 0.5 ? vl[vl.length - 1] : vl[0];
+    let wc = edgeSegW(y, hs.a0, hs.a1, Math.max(ex * W / H, 1e-6)) * edgeSegW(x, vs.a0, vs.a1, Math.max(ey * H / W, 1e-6));
+    let pc = cornerAt(cl, kx, ky);
+    for (let i = 0; i < 3; i++) { out[i] += (pc[i] - out[i]) * wc; }
+  }
+  return out;
+}
+// 角の面の表を (kx, ky) で双線形に引く。WGSL 側の cornerAt と同じ
+function cornerAt(t, kx, ky) {
+  let N = EDGE_CN - 1, px = kx * N, py = ky * N;
+  let ix = Math.min(Math.floor(px), N - 1), iy = Math.min(Math.floor(py), N - 1), fx = px - ix, fy = py - iy;
+  let a = (iy * EDGE_CN + ix) * 4, b = a + 4, c = a + EDGE_CN * 4, d = c + 4, out = [0, 0, 0];
+  for (let i = 0; i < 3; i++) {
+    let top = t[a + i] + (t[b + i] - t[a + i]) * fx, bot = t[c + i] + (t[d + i] - t[c + i]) * fx;
+    out[i] = top + (bot - top) * fy;
   }
   return out;
 }
@@ -756,7 +928,7 @@ async function detectAndInitRenderer() {
   // WebGPUのHDR設定はSDRディスプレイでも「成功」してしまう（出力が頭打ちになるだけ）ため、
   // dynamic-range メディアクエリでの能力判定が必須。
   const hdrDisplay = !!(window.matchMedia && window.matchMedia('(dynamic-range: high)').matches);
-  if (hdrDisplay && navigator.gpu) {
+  if (hdrDisplay && navigator.gpu && !NO_HDR) {
     try {
       const adapter = await navigator.gpu.requestAdapter();
       if (adapter) {
@@ -778,35 +950,40 @@ async function detectAndInitRenderer() {
 
 function makeCssRenderer(wide) {
   document.getElementById('gpu').style.display = 'none';
+  // 境界グラデーション用の小さなキャンバス（全面に引き伸ばして表示）。P3時は従来どおり符号値をP3座標として扱う
+  const bc = document.getElementById('blend2d');
+  const BW = bc.width, BH = bc.height;
+  let bctx = null, img = null;
+  try { bctx = bc.getContext('2d', wide ? { colorSpace: 'display-p3' } : undefined); } catch (e) { bctx = bc.getContext('2d'); }
+  try { img = wide ? bctx.createImageData(BW, BH, { colorSpace: 'display-p3' }) : bctx.createImageData(BW, BH); }
+  catch (e) { img = bctx.createImageData(BW, BH); }
   return {
     kind: wide ? 'P3広色域' : 'sRGB',
     draw: function (rgb) {
       let r = constrain(rgb[0], 0, 255), g = constrain(rgb[1], 0, 255), b = constrain(rgb[2], 0, 255);
-      // 線形値 → CSS の色文字列（P3時は従来どおり、符号値をそのままP3座標として扱う）
-      function css(lin) {
-        let e = [l2s(constrain(lin[0], 0, 1)), l2s(constrain(lin[1], 0, 1)), l2s(constrain(lin[2], 0, 1))];
-        return wide ? 'color(display-p3 ' + e[0].toFixed(4) + ' ' + e[1].toFixed(4) + ' ' + e[2].toFixed(4) + ')'
-                    : 'rgb(' + Math.round(e[0] * 255) + ',' + Math.round(e[1] * 255) + ',' + Math.round(e[2] * 255) + ')';
+      if (wide) {
+        document.body.style.backgroundColor = 'color(display-p3 ' + (r/255).toFixed(4) + ' ' + (g/255).toFixed(4) + ' ' + (b/255).toFixed(4) + ')';
+      } else {
+        document.body.style.backgroundColor = 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
       }
-      let own = wide ? 'color(display-p3 ' + (r/255).toFixed(4) + ' ' + (g/255).toFixed(4) + ' ' + (b/255).toFixed(4) + ')'
-                     : 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
-      document.body.style.backgroundColor = own;
-      let eL = edgeLut(rgb, nbLeft, 'L'), eR = edgeLut(rgb, nbRight, 'R');
-      if (eL || eR) {
-        // 表の各点を色の停止点として並べる（左：境界→帯の終わり、右：帯の終わり→境界）
-        let stops = [], band = 50 * blendWidth;
-        for (let j = 0; j <= EDGE_N; j++) {
-          stops.push((eL ? css([eL[j*4], eL[j*4+1], eL[j*4+2]]) : own) + ' ' + (band * j / EDGE_N).toFixed(2) + '%');
-        }
-        for (let j = EDGE_N; j >= 0; j--) {
-          stops.push((eR ? css([eR[j*4], eR[j*4+1], eR[j*4+2]]) : own) + ' ' + (100 - band * j / EDGE_N).toFixed(2) + '%');
-        }
-        // 停止点のあいだは、光量（線形）で補間できるブラウザではそうする
-        let sp = (window.CSS && CSS.supports('background-image', 'linear-gradient(to right in srgb-linear, red, blue)')) ? ' in srgb-linear' : '';
-        document.body.style.backgroundImage = 'linear-gradient(to right' + sp + ', ' + stops.join(', ') + ')';
-      } else if (document.body.style.backgroundImage) {
-        document.body.style.backgroundImage = '';
+      let luts = edgeLuts(rgb);
+      if (!luts) {
+        if (bc.style.display !== 'none') { bc.style.display = 'none'; }
+        return;
       }
+      let self = [s2l(r / 255), s2l(g / 255), s2l(b / 255)], d = img.data, k = 0;
+      for (let j = 0; j < BH; j++) {
+        for (let i = 0; i < BW; i++) {
+          // 端の画素がちょうど境界（0 と 1）になるように取る
+          let c = edgeColorAt(i / (BW - 1), j / (BH - 1), self, luts, window.innerWidth, window.innerHeight);
+          d[k++] = Math.round(l2s(constrain(c[0], 0, 1)) * 255);
+          d[k++] = Math.round(l2s(constrain(c[1], 0, 1)) * 255);
+          d[k++] = Math.round(l2s(constrain(c[2], 0, 1)) * 255);
+          d[k++] = 255;
+        }
+      }
+      bctx.putImageData(img, 0, 0);
+      if (bc.style.display !== 'block') { bc.style.display = 'block'; }
     }
   };
 }
@@ -818,14 +995,51 @@ function makeWebGPURenderer(device, ctx, format) {
     '  gray : vec4<f32>,\n' +
     '  rect : vec4<f32>,\n' +
     '  flags : vec4<f32>,\n' +
-    '  en : vec4<f32>,\n' +       // x：左の境界グラデーション有効、y：右
-    '  lut : array<vec4<f32>, ' + (2 * (EDGE_N + 1)) + '>,\n' +   // 境界→帯の終わりの色の表（線形×ゲイン）。前半＝左、後半＝右
+    '  size : vec4<f32>,\n' +     // xy：キャンバスの画素数
+    '  en : vec4<f32>,\n' +       // 各辺の区間の数（x左 y右 z上 w下）
+    '  lself : vec4<f32>,\n' +    // 自分の光（線形×ゲイン）
+    '  cflag : vec4<f32>,\n' +    // 4枠が集まる角の面の有無（x左上 y右上 z左下 w右下）
+    '  seg : array<vec4<f32>, ' + (4 * EDGE_MAXS) + '>,\n' +   // 区間 xy＝a0, a1（辺に沿った 0..1）。辺ごとに EDGE_MAXS 個
+    '  lut : array<vec4<f32>, ' + (4 * EDGE_MAXS * (EDGE_N + 1)) + '>,\n' +   // 区間ごとの、境界→帯の終わりの色の表（線形×ゲイン）
     '};\n' +
+    '@group(0) @binding(0) var<uniform> u : U;\n' +
+    '@group(0) @binding(1) var<storage, read> cl : array<vec4<f32>>;\n' +   // 4枠が集まる角の面の表（角ごとに EDGE_CN×EDGE_CN）
+    'fn lutAt(base : u32, k : f32) -> vec3<f32> {\n' +
+    '  let p = k * ' + EDGE_N + '.0;\n' +
+    '  let i0 = min(u32(floor(p)), ' + (EDGE_N - 1) + 'u);\n' +
+    '  return mix(u.lut[base + i0].rgb, u.lut[base + i0 + 1u].rgb, p - f32(i0));\n' +
+    '}\n' +
+    // 区間 sg（xy＝a0, a1）の重み。JS側の edgeSegW と同じ
+    'fn segW(pos : f32, sg : vec4<f32>, h : f32) -> f32 {\n' +
+    '  return clamp((pos - sg.x + h) / (2.0 * h), 0.0, 1.0) - clamp((pos - sg.y + h) / (2.0 * h), 0.0, 1.0);\n' +
+    '}\n' +
+    // 角の面の表を双線形に引く。JS側の cornerAt と同じ
+    'fn cornerAt(ci : u32, kx : f32, ky : f32) -> vec3<f32> {\n' +
+    '  let n = ' + (EDGE_CN - 1) + '.0;\n' +
+    '  let px = kx * n; let py = ky * n;\n' +
+    '  let ix = min(u32(floor(px)), ' + (EDGE_CN - 2) + 'u); let iy = min(u32(floor(py)), ' + (EDGE_CN - 2) + 'u);\n' +
+    '  let fx = px - f32(ix); let fy = py - f32(iy);\n' +
+    '  let a = ci * ' + (EDGE_CN * EDGE_CN) + 'u + iy * ' + EDGE_CN + 'u + ix;\n' +
+    '  let top = mix(cl[a].rgb, cl[a + 1u].rgb, fx);\n' +
+    '  let bot = mix(cl[a + ' + EDGE_CN + 'u].rgb, cl[a + ' + (EDGE_CN + 1) + 'u].rgb, fx);\n' +
+    '  return mix(top, bot, fy);\n' +
+    '}\n' +
+    // 辺 s の区間を重みで混ぜた色（rgb）と重みの和（a）。JS側の edgeColorAt 内の side() と同じ
+    'fn sideCol(s : u32, n : u32, k : f32, pos : f32, h : f32) -> vec4<f32> {\n' +
+    '  var acc = vec3<f32>(0.0); var ws = 0.0;\n' +
+    '  for (var i = 0u; i < ' + EDGE_MAXS + 'u; i = i + 1u) {\n' +
+    '    if (i >= n) { break; }\n' +
+    '    let id = s * ' + EDGE_MAXS + 'u + i;\n' +
+    '    let sg = u.seg[id];\n' +
+    '    let w = segW(pos, sg, h);\n' +
+    '    if (w > 0.0) { acc = acc + lutAt(id * ' + (EDGE_N + 1) + 'u, k) * w; ws = ws + w; }\n' +
+    '  }\n' +
+    '  return vec4<f32>(acc, ws);\n' +
+    '}\n' +
     'fn enc(v0 : vec3<f32>) -> vec3<f32> {\n' +   // 拡張sRGBエンコード（JS側の encExt と同じ）
     '  let v = max(v0, vec3<f32>(0.0));\n' +
     '  return select(12.92 * v, 1.055 * pow(v, vec3<f32>(1.0 / 2.4)) - 0.055, v > vec3<f32>(0.0031308));\n' +
     '}\n' +
-    '@group(0) @binding(0) var<uniform> u : U;\n' +
     '@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {\n' +
     '  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0,-3.0), vec2<f32>(-1.0,1.0), vec2<f32>(3.0,1.0));\n' +
     '  return vec4<f32>(p[i], 0.0, 1.0);\n' +
@@ -835,27 +1049,55 @@ function makeWebGPURenderer(device, ctx, format) {
     '    let d = abs(fc.xy - u.rect.xy);\n' +
     '    if (d.x <= u.rect.z && d.y <= u.rect.w) { return u.gray; }\n' +
     '  }\n' +
-    '  if (u.flags.y > 0.5) {\n' +                       // 境界グラデーション
-    '    let x = fc.x / u.flags.z;\n' +                  // 0..1（枠の左端→右端）
-    '    let t = min(x, 1.0 - x) * 2.0;\n' +             // 0=境界, 1=枠の中央
-    '    let k = clamp(t / u.flags.w, 0.0, 1.0);\n' +
-    '    var on = u.en.x;\n' +
-    '    var base = 0u;\n' +
-    '    if (x > 0.5) { on = u.en.y; base = ' + (EDGE_N + 1) + 'u; }\n' +
-    '    if (on > 0.5) {\n' +
-    '      let p = k * ' + EDGE_N + '.0;\n' +
-    '      let i0 = min(u32(floor(p)), ' + (EDGE_N - 1) + 'u);\n' +
-    '      let c = mix(u.lut[base + i0].rgb, u.lut[base + i0 + 1u].rgb, p - f32(i0));\n' +
+    '  if (u.flags.y > 0.5) {\n' +                       // 境界グラデーション（JS側の edgeColorAt と同じ計算）
+    '    let x = fc.x / u.size.x;\n' +                   // 0..1（枠の左端→右端）
+    '    let y = fc.y / u.size.y;\n' +                   // 0..1（上端→下端）
+    '    let ex = min(x, 1.0 - x); let ey = min(y, 1.0 - y);\n' +
+    '    let kx = clamp(ex * 2.0 / u.flags.w, 0.0, 1.0);\n' +   // 0=境界, 1=帯の外
+    '    let ky = clamp(ey * 2.0 / u.flags.w, 0.0, 1.0);\n' +
+    '    var hs = 0u; if (x > 0.5) { hs = 1u; }\n' +
+    '    var vs = 2u; if (y > 0.5) { vs = 3u; }\n' +
+    '    let hh = max(ex * u.size.x / u.size.y, 0.000001); let hv = max(ey * u.size.y / u.size.x, 0.000001);\n' +
+    '    let nh = u32(u.en[hs]); let nv = u32(u.en[vs]);\n' +
+    '    let ch = sideCol(hs, nh, kx, y, hh);\n' +
+    '    let cv = sideCol(vs, nv, ky, x, hv);\n' +
+    '    let hOn = ch.w > 0.000001; let vOn = cv.w > 0.000001;\n' +
+    '    if (hOn || vOn) {\n' +
+    '      let me = u.lself.rgb;\n' +
+    '      var wh = 1.0; var wv = 1.0;\n' +
+    '      if (hOn && vOn) {\n' +
+    '        let a = (1.0 - kx) * ky; let b = (1.0 - ky) * kx; let d = a + b;\n' +
+    '        if (d > 0.00001) { wh = a / d; wv = b / d; } else { wh = 0.5; wv = 0.5; }\n' +
+    '      }\n' +
+    '      var c = me;\n' +
+    '      if (hOn) { c = c + (ch.rgb / ch.w - me) * wh; }\n' +
+    '      if (vOn) { c = c + (cv.rgb / cv.w - me) * wv; }\n' +
+    '      var ci = 0u; if (x > 0.5) { ci = ci + 1u; } if (y > 0.5) { ci = ci + 2u; }\n' +
+    '      if (hOn && vOn && u.cflag[ci] > 0.5) {\n' +     // 4枠が集まる角の面
+    '        var ih = 0u; if (y > 0.5) { ih = nh - 1u; }\n' +
+    '        var iv = 0u; if (x > 0.5) { iv = nv - 1u; }\n' +
+    '        let wc = segW(y, u.seg[hs * ' + EDGE_MAXS + 'u + ih], hh) * segW(x, u.seg[vs * ' + EDGE_MAXS + 'u + iv], hv);\n' +
+    '        c = c + (cornerAt(ci, kx, ky) - c) * wc;\n' +
+    '      }\n' +
     '      return vec4<f32>(enc(c), 1.0);\n' +
     '    }\n' +
     '  }\n' +
     '  return u.bg;\n' +
     '}\n'
   });
-  const UB_FLOATS = 20 + 2 * (EDGE_N + 1) * 4;
+  const UB_SEG = 32, UB_LUT = UB_SEG + 4 * EDGE_MAXS * 4;
+  const CL_FLOATS = 4 * EDGE_CN * EDGE_CN * 4;
+  const cornerBuf = device.createBuffer({ size: CL_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const UB_FLOATS = UB_LUT + 4 * EDGE_MAXS * (EDGE_N + 1) * 4;
   const uniformBuf = device.createBuffer({ size: UB_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const bgl = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }] });
-  const bindGroup = device.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: uniformBuf } }] });
+  const bgl = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } }
+  ] });
+  const bindGroup = device.createBindGroup({ layout: bgl, entries: [
+    { binding: 0, resource: { buffer: uniformBuf } },
+    { binding: 1, resource: { buffer: cornerBuf } }
+  ] });
   const pipeline = device.createRenderPipeline({
     layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
     vertex: { module: shader, entryPoint: 'vs' },
@@ -885,17 +1127,32 @@ function makeWebGPURenderer(device, ctx, format) {
         let dpr = window.devicePixelRatio || 1;
         rcx = cx * dpr; rcy = glay[1] * dpr; rhw = (glay[0] / 2) * dpr; rhh = (glay[0] / 2) * dpr;
       }
-      let eL = edgeLut(rgb, nbLeft, 'L'), eR = edgeLut(rgb, nbRight, 'R');
+      let luts = edgeLuts(rgb);
       const data = new Float32Array(UB_FLOATS);
       data.set([
         bgR, bgG, bgB, 1.0,
         gR, gG, gB, 1.0,
         rcx, rcy, rhw, rhh,
-        showGray, (eL || eR) ? 1.0 : 0.0, Math.max(1, gpu.width), blendWidth,
-        eL ? 1.0 : 0.0, eR ? 1.0 : 0.0, 0.0, 0.0
+        showGray, luts ? 1.0 : 0.0, 0.0, blendWidth,
+        Math.max(1, gpu.width), Math.max(1, gpu.height), 0.0, 0.0,
+        luts ? luts.L.length : 0, luts ? luts.R.length : 0, luts ? luts.T.length : 0, luts ? luts.B.length : 0,
+        lr * hdrGain, lg * hdrGain, lb * hdrGain, 1.0,
+        (luts && luts.corners.TL) ? 1 : 0, (luts && luts.corners.TR) ? 1 : 0, (luts && luts.corners.BL) ? 1 : 0, (luts && luts.corners.BR) ? 1 : 0
       ], 0);
-      if (eL) { data.set(eL, 20); }
-      if (eR) { data.set(eR, 20 + (EDGE_N + 1) * 4); }
+      if (luts) {
+        EDGE_CORNERS.forEach(function (c, ci) {
+          if (luts.corners[c]) { device.queue.writeBuffer(cornerBuf, ci * EDGE_CN * EDGE_CN * 16, luts.corners[c]); }
+        });
+      }
+      if (luts) {
+        EDGE_SIDES.forEach(function (k, si) {
+          luts[k].forEach(function (sg, i) {
+            let id = si * EDGE_MAXS + i;
+            data.set([sg.a0, sg.a1, 0, 0], UB_SEG + id * 4);
+            data.set(sg.lut, UB_LUT + id * (EDGE_N + 1) * 4);
+          });
+        });
+      }
       device.queue.writeBuffer(uniformBuf, 0, data);
       const enc = device.createCommandEncoder();
       const view = ctx.getCurrentTexture().createView();
@@ -1104,23 +1361,39 @@ function initPaneMessaging() {
     else if (d.type === 'wake') { setWakeState(d.state); }
     else if (d.type === 'getState') { toHost({ type: 'state', id: d.id, state: getState() }); }
     else if (d.type === 'shared') {
-      sharedUI = !!d.on;
+      let was = sharedUI;
+      sharedUI = !!d.on; topInset = +d.top || 0;
       document.body.classList.toggle('shared', sharedUI);
       if (sharedUI && d.mode) { setModeById(d.mode); }
-      if (modeModal) { modeModal.classList.remove('open'); }
-      if (infoPanel) { infoPanel.style.display = 'none'; }
+      if (was !== sharedUI) {
+        if (modeModal) { modeModal.classList.remove('open'); }
+        if (infoPanel) { infoPanel.style.display = 'none'; }
+      }
       layout(); applyResponsive();
     }
     else if (d.type === 'setMode') { setModeById(d.mode); }
     else if (d.type === 'blend') {
       blendOn = !!d.on; blendWidth = constrain(+d.width || 1, 0.05, 1);
-      hasLeft = !!d.hasLeft; hasRight = !!d.hasRight;
-      if (!blendOn || !hasLeft) { nbLeft = null; }
-      if (!blendOn || !hasRight) { nbRight = null; }
+      // 辺ごとの区間の並び。並びが同じなら届いている色を引き継ぐ（設定が来るたびに一瞬つながりが切れないように）
+      EDGE_SIDES.forEach(function (k) {
+        let segs = (blendOn && d.segs && Array.isArray(d.segs[k])) ? d.segs[k] : [];
+        let old = nb[k];
+        nb[k] = segs.slice(0, EDGE_MAXS).map(function (sg, i) {
+          let keep = (old.length === segs.length && old[i]) ? old[i].c : null;
+          return { a0: +sg[0], a1: +sg[1], c: keep };
+        });
+      });
+      EDGE_CORNERS.forEach(function (c) {
+        cornerOn[c] = !!(blendOn && d.corners && d.corners[c]);
+        if (!cornerOn[c]) { diag[c] = null; }
+      });
     }
-    else if (d.type === 'nb' && Array.isArray(d.rgb)) {
-      let nb = { r: +d.rgb[0], g: +d.rgb[1], b: +d.rgb[2], gain: +d.gain || 1 };
-      if (d.side === 'left') { nbLeft = nb; } else { nbRight = nb; }
+    else if (d.type === 'nbd' && Array.isArray(d.rgb) && diag.hasOwnProperty(d.corner)) {
+      diag[d.corner] = { r: +d.rgb[0], g: +d.rgb[1], b: +d.rgb[2], gain: +d.gain || 1 };
+    }
+    else if (d.type === 'nb' && Array.isArray(d.rgb) && nb.hasOwnProperty(d.side)) {
+      let sg = nb[d.side][d.idx | 0];
+      if (sg) { sg.c = { r: +d.rgb[0], g: +d.rgb[1], b: +d.rgb[2], gain: +d.gain || 1 }; }
     }
   });
   toHost({ type: 'ready' });
@@ -1175,14 +1448,6 @@ function buildHost() {
   wrap.id = 'panes';
   document.body.appendChild(wrap);
 
-  [['splitLeft', 'left', '左にタイムラインを追加'], ['splitRight', 'right', '右にタイムラインを追加']].forEach(function (d) {
-    let b = document.createElement('button');
-    b.id = d[0]; b.className = 'splitBtn'; b.textContent = '+'; b.title = d[2];
-    b.setAttribute('aria-label', d[2]);
-    b.addEventListener('click', function () { b.blur(); addPane(d[1]); });
-    document.body.appendChild(b);
-  });
-
   // ---- 共通バー（2つ以上に分割しているあいだだけ出る） ----
   hostBar = document.createElement('div');
   hostBar.id = 'hostBar';
@@ -1223,66 +1488,200 @@ function buildHost() {
   });
 
   window.addEventListener('message', onHostMessage);
-  window.addEventListener('resize', hostLayoutPanes);
+  window.addEventListener('resize', function () { hostLayoutPanes(); hostPanes.forEach(hostSendConfig); });
   ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (n) {
     document.addEventListener(n, function () {
       // Esc などでブラウザ側がフルスクリーンを解いたとき、UIも戻す
       if (!hostFsElement() && playMode) { hostSetPlay(false, true); }
     });
   });
-  createPane('right', null);
+  // 最初の枠（木の根）
+  let first = makePane(null);
+  hostRoot = { pane: first, parent: null };
+  first.node = hostRoot;
+  hostSyncPanes();
 }
 
 function hostFsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
 
-function createPane(side, state) {
+// 枠（iframe＋×＋四辺の＋）を1つ作る。置き場所は分割の木が決める
+function makePane(state) {
   let wrap = document.getElementById('panes');
   let div = document.createElement('div');
   div.className = 'pane';
   let f = document.createElement('iframe');
   f.setAttribute('allow', 'fullscreen');
   f.title = 'タイムライン';
-  f.src = location.pathname.split('/').pop() + '?pane=1' + (state ? '#s=' + encodeURIComponent(JSON.stringify(state)) : '');
+  f.src = location.pathname.split('/').pop() + '?pane=1' + (NO_HDR ? '&nohdr=1' : '') +
+    (state ? '#s=' + encodeURIComponent(JSON.stringify(state)) : '');
+  let pane = { div: div, frame: f, node: null, rect: { x: 0, y: 0, w: 0, h: 0 }, nb: {}, top: 0 };
+  div.appendChild(f);
   let x = document.createElement('button');
   x.className = 'paneClose'; x.textContent = '×'; x.title = 'このタイムラインを閉じる';
   x.setAttribute('aria-label', 'このタイムラインを閉じる');
-  // 追加するときは全体を均等に割り直す（幅の調整はその後で）
-  hostPanes.forEach(function (q) { q.weight = 1; });
-  let pane = { div: div, frame: f, weight: 1 };
   x.addEventListener('click', function () { removePane(pane); });
-  div.appendChild(f); div.appendChild(x);
-  if (side === 'left') { wrap.insertBefore(div, wrap.firstChild); hostPanes.unshift(pane); }
-  else { wrap.appendChild(div); hostPanes.push(pane); }
+  div.appendChild(x);
+  pane.closeBtn = x;
+  [['L', 'left', '左'], ['R', 'right', '右'], ['T', 'top', '上'], ['B', 'bottom', '下']].forEach(function (d) {
+    let b = document.createElement('button');
+    b.className = 'splitBtn s' + d[0]; b.textContent = '+';
+    b.title = 'この枠を二分して、' + d[2] + 'に複製を置く';
+    b.setAttribute('aria-label', b.title);
+    b.addEventListener('click', function () { b.blur(); addPane(pane, d[1]); });
+    div.appendChild(b);
+  });
+  wrap.appendChild(div);
+  hostPanes.push(pane);
+  return pane;
+}
+
+// pane の領域を二分して、side 側に新しい枠を置く。ほかの枠の大きさは変わらない
+function splitPane(pane, side, state) {
+  let np = makePane(state);
+  let leaf = pane.node, nl = { pane: np, parent: null };
+  np.node = nl;
+  let firstNew = (side === 'left' || side === 'top');
+  let sp = {
+    dir: (side === 'left' || side === 'right') ? 'row' : 'col',
+    a: firstNew ? nl : leaf, b: firstNew ? leaf : nl, ratio: 0.5, parent: leaf.parent
+  };
+  hostReplaceNode(leaf, sp);
+  leaf.parent = sp; nl.parent = sp;
+  hostSyncPanes();
+}
+function hostReplaceNode(oldNode, newNode) {
+  let par = oldNode.parent;
+  if (!par) { hostRoot = newNode; }
+  else if (par.a === oldNode) { par.a = newNode; }
+  else { par.b = newNode; }
+}
+
+// 閉じると、二分の相手が領域全体を引き継ぐ
+function removePane(pane) {
+  if (hostPanes.length <= 1) { return; }
+  let leaf = pane.node, sp = leaf.parent;
+  let sib = (sp.a === leaf) ? sp.b : sp.a;
+  hostReplaceNode(sp, sib);
+  sib.parent = sp.parent;
+  hostPanes = hostPanes.filter(function (q) { return q !== pane; });
+  pane.div.remove();
   hostSyncPanes();
 }
 
-// 分割数・共通設定を全ペインへ配り直す（追加・削除・設定変更のたびに呼ぶ）
-// 各枠の右端のx座標（整数px）。幅は枠ごとの重み weight の比で配分する
-function hostEdges() {
-  let W = window.innerWidth, total = 0, acc = 0;
-  hostPanes.forEach(function (q) { total += q.weight; });
-  return hostPanes.map(function (q) { acc += q.weight; return Math.round(W * acc / total); });
-}
-function hostLayoutPanes() {
-  let edges = hostEdges();
-  hostPanes.forEach(function (q, i) {
-    q.div.style.flex = '0 0 ' + (edges[i] - (i > 0 ? edges[i - 1] : 0)) + 'px';
-  });
-  // 境界のつまみを、枠の数に合わせて作り直して置く
-  let ds = document.querySelectorAll('.paneDivider');
-  if (ds.length !== hostPanes.length - 1) {
-    ds.forEach(function (d) { d.remove(); });
-    for (let k = 0; k < hostPanes.length - 1; k++) { makeDivider(k); }
-    ds = document.querySelectorAll('.paneDivider');
+function addPane(pane, side) {
+  let id = ++hostReqId, done = false;
+  function finish(state) {
+    if (done) { return; }
+    done = true; delete hostStateWaiters[id];
+    if (hostPanes.indexOf(pane) < 0) { return; }
+    // 分割を始めるときは、複製元の方式を共通の方式にする
+    if (state && hostPanes.length === 1) { setModeById(state.mode); }
+    splitPane(pane, side, state);
   }
-  ds.forEach(function (d, k) { d.style.left = edges[k] + 'px'; });
+  hostStateWaiters[id] = finish;
+  try { pane.frame.contentWindow.postMessage({ type: 'getState', id: id }, '*'); } catch (err) {}
+  setTimeout(function () { finish(null); }, 600);   // 返事がなければ初期状態で作る
 }
-// k番目とk+1番目の枠のあいだのつまみ。2つの枠の合計幅は変えず、配分だけ動かす
-function makeDivider(k) {
+
+// 節が収まるのに必要な最小の寸法（axis：'w' または 'h'）。枠1つは 220×320
+function hostMinSize(node, axis) {
+  if (node.pane) { return axis === 'w' ? 220 : 320; }
+  let a = hostMinSize(node.a, axis), b = hostMinSize(node.b, axis);
+  return ((node.dir === 'row') === (axis === 'w')) ? a + b : Math.max(a, b);
+}
+
+// 木をたどって各枠の矩形（整数px）を決める。端数幅だと継ぎ目に線が出るので丸める
+function hostLayoutPanes() {
+  if (!hostRoot) { return; }
+  (function walk(node, r) {
+    node.rect = r;
+    if (node.pane) {
+      node.pane.rect = r;
+      let st = node.pane.div.style;
+      st.left = r.x + 'px'; st.top = r.y + 'px'; st.width = r.w + 'px'; st.height = r.h + 'px';
+      return;
+    }
+    if (node.dir === 'row') {
+      let w1 = Math.round(r.w * node.ratio);
+      walk(node.a, { x: r.x, y: r.y, w: w1, h: r.h });
+      walk(node.b, { x: r.x + w1, y: r.y, w: r.w - w1, h: r.h });
+      if (node.divEl) { let s = node.divEl.style; s.left = (r.x + w1 - 9) + 'px'; s.top = r.y + 'px'; s.width = '18px'; s.height = r.h + 'px'; }
+    } else {
+      let h1 = Math.round(r.h * node.ratio);
+      walk(node.a, { x: r.x, y: r.y, w: r.w, h: h1 });
+      walk(node.b, { x: r.x, y: r.y + h1, w: r.w, h: r.h - h1 });
+      if (node.divEl) { let s = node.divEl.style; s.left = r.x + 'px'; s.top = (r.y + h1 - 9) + 'px'; s.width = r.w + 'px'; s.height = '18px'; }
+    }
+  })(hostRoot, { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight });
+
+  // 境界グラデーションの相手：辺を共有する（長さ1px以上重なる）隣を、辺ごとに辺の向きの順で並べる。
+  // 各相手には、その辺の上での区間（0..1）を付ける。相手が EDGE_MAXS を超える辺はつながない
+  hostPanes.forEach(function (q) { q.nb = { L: [], R: [], T: [], B: [] }; });
+  hostPanes.forEach(function (p) {
+    hostPanes.forEach(function (q) {
+      let a = p.rect, b = q.rect;
+      if (b.x === a.x + a.w) {   // q は p の右
+        let y0 = Math.max(a.y, b.y), y1 = Math.min(a.y + a.h, b.y + b.h);
+        if (y1 - y0 >= 1) {
+          p.nb.R.push({ pane: q, a0: (y0 - a.y) / a.h, a1: (y1 - a.y) / a.h });
+          q.nb.L.push({ pane: p, a0: (y0 - b.y) / b.h, a1: (y1 - b.y) / b.h });
+        }
+      }
+      if (b.y === a.y + a.h) {   // q は p の下
+        let x0 = Math.max(a.x, b.x), x1 = Math.min(a.x + a.w, b.x + b.w);
+        if (x1 - x0 >= 1) {
+          p.nb.B.push({ pane: q, a0: (x0 - a.x) / a.w, a1: (x1 - a.x) / a.w });
+          q.nb.T.push({ pane: p, a0: (x0 - b.x) / b.w, a1: (x1 - b.x) / b.w });
+        }
+      }
+    });
+  });
+  hostPanes.forEach(function (q) {
+    ['L', 'R', 'T', 'B'].forEach(function (k) {
+      q.nb[k].sort(function (m, n) { return m.a0 - n.a0; });
+      if (q.nb[k].length > EDGE_MAXS) { q.nb[k] = []; }
+    });
+  });
+  // 4枠が集まる角：左右の隣と上下の隣の両方が、ちょうどその角で終わっていれば4枠。対角の枠を覚える
+  hostPanes.forEach(function (p) {
+    let a = p.rect, R = a.x + a.w, Bm = a.y + a.h;
+    function rr(m) { return m && m.pane.rect; }
+    function find(f) { return hostPanes.filter(function (q) { return q !== p && f(q.rect); })[0] || null; }
+    let L = p.nb.L, Rt = p.nb.R, T = p.nb.T, B = p.nb.B;
+    let hTL = rr(L[0]), vTL = rr(T[0]), hTR = rr(Rt[0]), vTR = rr(T[T.length - 1]);
+    let hBL = rr(L[L.length - 1]), vBL = rr(B[0]), hBR = rr(Rt[Rt.length - 1]), vBR = rr(B[B.length - 1]);
+    p.diag = {
+      TL: (hTL && vTL && hTL.y === a.y && vTL.x === a.x) ? find(function (r) { return r.x + r.w === a.x && r.y + r.h === a.y; }) : null,
+      TR: (hTR && vTR && hTR.y === a.y && vTR.x + vTR.w === R) ? find(function (r) { return r.x === R && r.y + r.h === a.y; }) : null,
+      BL: (hBL && vBL && hBL.y + hBL.h === Bm && vBL.x === a.x) ? find(function (r) { return r.x + r.w === a.x && r.y === Bm; }) : null,
+      BR: (hBR && vBR && hBR.y + hBR.h === Bm && vBR.x + vBR.w === R) ? find(function (r) { return r.x === R && r.y === Bm; }) : null
+    };
+  });
+  // 上端が共通バーにかかる枠は、中身と×を下げる
+  let multi = hostPanes.length > 1;
+  hostPanes.forEach(function (q) {
+    q.top = (multi && q.rect.y < 60) ? 46 : 0;
+    q.closeBtn.style.top = (q.top + 26) + 'px';
+  });
+}
+
+// 分割の節ごとに、境界のつまみを作り直す（木の形が変わったとき）
+function hostRebuildDividers() {
+  hostDividers.forEach(function (d) { d.remove(); });
+  hostDividers = [];
+  (function walk(node) {
+    if (node.pane) { return; }
+    makeDivider(node);
+    walk(node.a); walk(node.b);
+  })(hostRoot);
+}
+function makeDivider(sp) {
   let d = document.createElement('div');
-  d.className = 'paneDivider';
-  d.title = 'ドラッグで幅を調整（ダブルクリックで均等に戻す）';
+  d.className = 'paneDivider ' + (sp.dir === 'row' ? 'dv' : 'dh');
+  d.title = 'ドラッグで比率を調整（ダブルクリックで半々に戻す）';
   document.body.appendChild(d);
+  sp.divEl = d;
+  hostDividers.push(d);
   let dragging = false;
   d.addEventListener('pointerdown', function (ev) {
     dragging = true; d.classList.add('drag');
@@ -1291,24 +1690,31 @@ function makeDivider(k) {
   });
   d.addEventListener('pointermove', function (ev) {
     if (!dragging) { return; }
-    let edges = hostEdges();
-    let L = k > 0 ? edges[k - 1] : 0, Rr = edges[k + 1];
-    let minW = Math.min(220, (Rr - L) / 2);   // 時間バーが収まる幅
-    let x = Math.max(L + minW, Math.min(Rr - minW, ev.clientX));
-    let sum = hostPanes[k].weight + hostPanes[k + 1].weight;
-    hostPanes[k].weight = sum * (x - L) / (Rr - L);
-    hostPanes[k + 1].weight = sum - hostPanes[k].weight;
+    let r = sp.rect, row = (sp.dir === 'row');
+    let size = row ? r.w : r.h, pos = row ? ev.clientX - r.x : ev.clientY - r.y;
+    let axis = row ? 'w' : 'h';
+    let lo = hostMinSize(sp.a, axis), hi = size - hostMinSize(sp.b, axis);
+    if (lo > hi) { lo = hi = size * lo / (lo + (size - hi)); }   // 収まらないときは最小寸法の比で分ける
+    sp.ratio = Math.max(lo, Math.min(hi, pos)) / size;
     hostLayoutPanes();
   });
-  let end = function () { dragging = false; d.classList.remove('drag'); };
+  let end = function () {
+    if (!dragging) { return; }
+    dragging = false; d.classList.remove('drag');
+    hostPanes.forEach(hostSendConfig);   // 辺の重なり方が変わると、境界グラデーションの相手も変わる
+  };
   d.addEventListener('pointerup', end);
   d.addEventListener('pointercancel', end);
   d.addEventListener('dblclick', function () {
-    hostPanes.forEach(function (q) { q.weight = 1; });
+    sp.ratio = 0.5;
     hostLayoutPanes();
+    hostPanes.forEach(hostSendConfig);
   });
 }
+
+// 分割数・共通設定を全ペインへ配り直す（追加・削除・設定変更のたびに呼ぶ）
 function hostSyncPanes() {
+  hostRebuildDividers();
   hostLayoutPanes();
   let multi = hostPanes.length > 1;
   document.body.classList.toggle('multi', multi);
@@ -1316,37 +1722,20 @@ function hostSyncPanes() {
     if (modeModal) { modeModal.classList.remove('open'); }
     if (infoPanel) { infoPanel.style.display = 'none'; }
   }
-  hostPanes.forEach(function (q) { hostSendConfig(q); });
+  hostPanes.forEach(hostSendConfig);
 }
 function hostSendConfig(q) {
-  let i = hostPanes.indexOf(q), multi = hostPanes.length > 1;
+  let multi = hostPanes.length > 1;
   try {
     let w = q.frame.contentWindow;
-    w.postMessage({ type: 'shared', on: multi, mode: mode }, '*');
-    w.postMessage({ type: 'blend', on: multi && blendOn, width: blendWidth, hasLeft: i > 0, hasRight: i < hostPanes.length - 1 }, '*');
+    w.postMessage({ type: 'shared', on: multi, mode: mode, top: q.top }, '*');
+    w.postMessage({ type: 'blend', on: multi && blendOn, width: blendWidth,
+      segs: {
+        L: q.nb.L.map(function (m) { return [m.a0, m.a1]; }), R: q.nb.R.map(function (m) { return [m.a0, m.a1]; }),
+        T: q.nb.T.map(function (m) { return [m.a0, m.a1]; }), B: q.nb.B.map(function (m) { return [m.a0, m.a1]; })
+      },
+      corners: { TL: !!q.diag.TL, TR: !!q.diag.TR, BL: !!q.diag.BL, BR: !!q.diag.BR } }, '*');
   } catch (err) {}
-}
-
-function removePane(pane) {
-  if (hostPanes.length <= 1) { return; }
-  hostPanes = hostPanes.filter(function (q) { return q !== pane; });
-  pane.div.remove();
-  hostSyncPanes();
-}
-
-function addPane(side) {
-  let src = (side === 'left') ? hostPanes[0] : hostPanes[hostPanes.length - 1];
-  let id = ++hostReqId, done = false;
-  function finish(state) {
-    if (done) { return; }
-    done = true; delete hostStateWaiters[id];
-    // 分割を始めるときは、複製元の方式を共通の方式にする
-    if (state && hostPanes.length === 1) { setModeById(state.mode); }
-    createPane(side, state);
-  }
-  hostStateWaiters[id] = finish;
-  try { src.frame.contentWindow.postMessage({ type: 'getState', id: id }, '*'); } catch (err) {}
-  setTimeout(function () { finish(null); }, 600);   // 返事がなければ初期状態で作る
 }
 
 function hostBroadcast(msg) {
@@ -1357,11 +1746,23 @@ function onHostMessage(ev) {
   let d = ev.data;
   if (!d || !hostPanes.some(function (q) { return q.frame.contentWindow === ev.source; })) { return; }
   if (d.type === 'color') {
-    // 現在色を両隣へ中継する
-    let i = -1;
-    for (let k = 0; k < hostPanes.length; k++) { if (hostPanes[k].frame.contentWindow === ev.source) { i = k; } }
-    if (i > 0) { hostPanes[i - 1].frame.contentWindow.postMessage({ type: 'nb', side: 'right', rgb: d.rgb, gain: d.gain }, '*'); }
-    if (i >= 0 && i < hostPanes.length - 1) { hostPanes[i + 1].frame.contentWindow.postMessage({ type: 'nb', side: 'left', rgb: d.rgb, gain: d.gain }, '*'); }
+    // 現在色を、辺を共有する隣へ中継する（相手から見た側の名前と、その辺での並び順で送る）
+    let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
+    if (me) {
+      [['L', 'R'], ['R', 'L'], ['T', 'B'], ['B', 'T']].forEach(function (pr) {
+        me.nb[pr[0]].forEach(function (m) {
+          let o = m.pane, idx = -1;
+          o.nb[pr[1]].forEach(function (r, i) { if (r.pane === me) { idx = i; } });
+          if (idx >= 0) { try { o.frame.contentWindow.postMessage({ type: 'nb', side: pr[1], idx: idx, rgb: d.rgb, gain: d.gain }, '*'); } catch (err) {} }
+        });
+      });
+      // 4枠が集まる角の対角の枠へも送る
+      hostPanes.forEach(function (q) {
+        EDGE_CORNERS.forEach(function (c) {
+          if (q.diag && q.diag[c] === me) { try { q.frame.contentWindow.postMessage({ type: 'nbd', corner: c, rgb: d.rgb, gain: d.gain }, '*'); } catch (err) {} }
+        });
+      });
+    }
     return;
   }
   if (d.type === 'ready') {
@@ -1996,8 +2397,8 @@ function buildInfoUI(parentEl) {
     '<li><b>白い針（再生ヘッド）をドラッグ</b> — 再生位置を動かす</li>' +
     '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ　<b>↻ボタン</b> — 回転の向きを逆にする（針の位置はそのまま）</li>' +
     '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
-    '<li><b>画面の左右にある ＋</b> — 画面を均等に分割し、その側にタイムラインを複製して並べる（何度でも増やせます）。<b>左上の ×</b> でそのタイムラインを閉じる。<b>境界のつまみ</b>を左右にドラッグすると幅の配分を変えられます（ダブルクリックで均等に戻す）</li>' +
-    '<li><b>分割中の上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。横のスライダーは幅（右端＝枠の中央まで）</li>' +
+    '<li><b>枠の四辺にある ＋</b> — その枠を二分して、押した側に複製を置く（左右にも上下にも、何度でも分けられます。ほかの枠の大きさは変わりません）。<b>左上の ×</b> でその枠を閉じる。<b>境界の白いつまみ</b>をドラッグすると比率を変えられます（ダブルクリックで半々に戻す）</li>' +
+    '<li><b>分割中の上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。1つの辺に複数のタイムラインが接するところは、区間ごとに相手を替えてつなぎます。中間混色の方式では、4つのタイムラインが集まる角も4色をなめらかに混ぜます。横のスライダーは幅（右端＝枠の中央まで）</li>' +
     '<li><b>⋯</b>（分割して細くなったとき）— xy色度図・輝度検証・色の設定を開閉</li>' +
     '</ul>' +
     '<h3>パネル</h3>' +

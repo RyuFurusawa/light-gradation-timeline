@@ -79,6 +79,23 @@
   #colorPop .hex { font: 12px ui-monospace, Menlo, monospace; color: rgba(255,255,255,0.7); flex: 1 1 auto; }
   #colorPop button { padding: 6px 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.18);
     background: rgba(255,255,255,0.08); color: #f2f2f2; font-size: 12.5px; cursor: pointer; }
+  /* タッチ端末：画面の下からせり出すシート。幅いっぱいの大きな面と太い色相の帯で、指で編集しやすく */
+  #colorPop.sheetMode {
+    display: block; left: 0 !important; right: 0; top: auto !important; bottom: 0;
+    padding: 8px 16px calc(14px + env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0;
+    border-bottom: 0; transform: translateY(105%); transition: transform 0.24s cubic-bezier(.2,.8,.2,1);
+    pointer-events: none;
+  }
+  #colorPop.sheetMode.open { transform: translateY(0); pointer-events: auto; }
+  #colorPop .grab { display: none; width: 40px; height: 5px; border-radius: 3px; margin: 0 auto 10px;
+    background: rgba(255,255,255,0.28); }
+  #colorPop.sheetMode .grab { display: block; }
+  #colorPop.sheetMode canvas { margin-left: auto; margin-right: auto; }
+  #colorPop.sheetMode .hue { margin-top: 12px; border-radius: 10px; }
+  #colorPop.sheetMode .row { margin-top: 12px; gap: 12px; }
+  #colorPop.sheetMode .sw { width: 34px; height: 34px; }
+  #colorPop.sheetMode .hex { font-size: 14px; }
+  #colorPop.sheetMode button { padding: 10px 20px; font-size: 14px; border-radius: 11px; }
   /* 補間方式スイッチ（サークル上部）とモーダル */
   #modeSwitch {
     position: fixed; left: 50%; transform: translateX(-50%); z-index: 13;
@@ -226,6 +243,7 @@
   .splitBtn, .paneClose { transition: opacity 0.18s; }
   body.multi .pane:not(.active) .splitBtn, body.multi .pane:not(.active) .paneClose { opacity: 0; pointer-events: none; }
   body.playing .splitBtn, body.playing .paneClose { display: none; }
+  .pane.picking .splitBtn, .pane.picking .paneClose { display: none; }   /* 色選びのシートを開いている枠 */
   /* 分割の境界：ドラッグで比率を変える（ダブルクリックで半々に戻す）。つまみは境界の1/4の位置（中央は＋が使う） */
   .paneDivider { position: fixed; z-index: 24; touch-action: none; }
   .paneDivider.dv { cursor: col-resize; }
@@ -462,6 +480,7 @@ function setup() {
   }
   let c = createCanvas(window.innerWidth, window.innerHeight);
   c.class('p5Canvas');
+  mainCanvasElt = c.elt;
   layout();
   textFont('system-ui, sans-serif');
 
@@ -1253,9 +1272,9 @@ function drawPlayhead(a) {
   let x1 = cx + cos(a) * (R + L), y1 = cy + sin(a) * (R + L);
   haloOn(5 + 3 * s, 0.9);
   stroke(255); strokeWeight(Math.max(1.5, 2.4 * s)); strokeCap(ROUND); line(x0, y0, x1, y1);
-  // つまみは、キーストーンと同じく操作できる枠（カーソルのある枠・タッチで選んだ枠）だけに出す。ほかは線だけ
+  // つまみ：マウスはリングに近づいたとき（白い輪と同じ ringA）だけ、タッチは選んでいる枠だけに出す。ほかは線だけ
   updateKeyVisibility();
-  let ka = dragPlayhead ? 1 : keyA;
+  let ka = dragPlayhead ? 1 : (isCoarse ? keyA : ringA);
   if (ka > 0) { noStroke(); fill(255, 255 * ka); circle(x1, y1, rd.knob); }
   haloOff();
 }
@@ -1321,7 +1340,10 @@ function drawOutlinedText(s, x, y, size, al) {
 }
 
 /* ---------------- 操作 ---------------- */
-function isCanvasEvent(e) { return !e || !e.target || e.target.tagName === 'CANVAS'; }
+// リングを描く p5 のキャンバスへの操作か。色選びの面など、ほかの canvas 要素への操作は含めない
+// （iPhone ではタッチの知らせが別に届き、色選びの面を触るとパネルが閉じていた）
+let mainCanvasElt = null;
+function isCanvasEvent(e) { return !e || !e.target || (mainCanvasElt ? e.target === mainCanvasElt : e.target.tagName === 'CANVAS'); }
 
 function mousePressed(e) {
   if (IS_HOST || !isCanvasEvent(e)) { return; }
@@ -1413,16 +1435,27 @@ function touchEnded(e) { if (IS_HOST || !isCanvasEvent(e)) { return; } mouseRele
    ブラウザ標準の色選び（隠した input type=color をプログラムから開く方式）は iPhone で開かないことがあったので、
    アプリ内のパネルにした：彩度×明度の面（HSB の S・B）と色相の帯。動かすとすぐキーストーンの色が変わる */
 let colorPop = null, popSV = null, popHue = null, popSw = null, popHex = null, popHSV = [0, 1, 1];
-const POP_W = 176, POP_H = 120, HUE_H = 16;
-function buildColorPop() {
-  colorPop = document.createElement('div');
-  colorPop.id = 'colorPop';
-  popSV = document.createElement('canvas'); popHue = document.createElement('canvas'); popHue.className = 'hue';
+let POP_W = 176, POP_H = 120, HUE_H = 16;
+// 面と帯の大きさ。マウスは小さなパネル、タッチは幅いっぱいのシート（高さは画面の 4 割まで）
+function sizePicker() {
+  if (isCoarse) {
+    POP_W = Math.round(Math.min(width - 32, 520));
+    POP_H = Math.round(Math.min(POP_W * 0.56, height * 0.4));
+    HUE_H = 34;
+  } else { POP_W = 176; POP_H = 120; HUE_H = 16; }
   let dpr = window.devicePixelRatio || 1;
   [[popSV, POP_W, POP_H], [popHue, POP_W, HUE_H]].forEach(function (c) {
     c[0].width = Math.round(c[1] * dpr); c[0].height = Math.round(c[2] * dpr);
     c[0].style.width = c[1] + 'px'; c[0].style.height = c[2] + 'px';
   });
+}
+function buildColorPop() {
+  colorPop = document.createElement('div');
+  colorPop.id = 'colorPop';
+  if (isCoarse) { colorPop.classList.add('sheetMode'); }
+  let grab = document.createElement('div'); grab.className = 'grab';
+  colorPop.appendChild(grab);
+  popSV = document.createElement('canvas'); popHue = document.createElement('canvas'); popHue.className = 'hue';
   let row = document.createElement('div'); row.className = 'row';
   popSw = document.createElement('span'); popSw.className = 'sw';
   popHex = document.createElement('span'); popHex.className = 'hex';
@@ -1449,8 +1482,11 @@ function buildColorPop() {
     popHSV[0] = constrain((ev.clientX - r.left) / r.width, 0, 1) * 359.9;
     applyPicker();
   });
-  // パネルの外での操作がキャンバスへ漏れないように
-  colorPop.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+  // パネルの中での操作が、リングのキャンバスの操作（パネルを閉じる・色点を足す）へ漏れないように。
+  // タッチ・マウスの知らせも止める（p5 は window で受けている）
+  ['pointerdown', 'mousedown', 'touchstart', 'touchmove', 'touchend'].forEach(function (n) {
+    colorPop.addEventListener(n, function (ev) { ev.stopPropagation(); }, { passive: true });
+  });
 }
 function drawPicker() {
   let dpr = window.devicePixelRatio || 1;
@@ -1481,10 +1517,18 @@ function applyPicker() {
 }
 function openPickerAt(i, x, y) {
   if (!colorPop) { buildColorPop(); }
+  sizePicker();
   pickTarget = i;
   let p = points[i], hsv = rgb2hsv(p.r, p.g, p.b);
   // 無彩色のときは色相が決まらないので、前の色相を引き継ぐ
   popHSV = [hsv[1] < 1e-4 ? popHSV[0] : hsv[0], hsv[1], hsv[2]];
+  if (isCoarse) {
+    // タッチ：下からせり出す（位置は CSS が決める）。描いてから開くと、せり出す途中から色が見える
+    applyPicker();
+    requestAnimationFrame(function () { colorPop.classList.add('open'); });
+    toHost({ type: 'picker', on: true });   // シートの上に親の＋や×が重ならないように隠してもらう
+    return;
+  }
   colorPop.classList.add('open');
   // キーストーンの横（リングの外へ向かう側、入らなければ反対側）に出す。横に入らなければ上か下（リングの中心側）に出す。
   // どの場合もキーストーン自身には被せない
@@ -1502,6 +1546,7 @@ function openPickerAt(i, x, y) {
   applyPicker();
 }
 function closePicker() {
+  if (colorPop && colorPop.classList.contains('open') && isCoarse) { toHost({ type: 'picker', on: false }); }
   if (colorPop) { colorPop.classList.remove('open'); }
   pickTarget = -1;
 }
@@ -2016,6 +2061,9 @@ function onHostMessage(ev) {
     if (hostStateWaiters[d.id]) { hostStateWaiters[d.id](d.state); }
   } else if (d.type === 'play') {
     hostSetPlay(!!d.on, !!d.asked);
+  } else if (d.type === 'picker') {
+    let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
+    if (me) { me.div.classList.toggle('picking', !!d.on); }
   } else if (d.type === 'hover') {
     hostSetActive(hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0]);
   } else if (d.type === 'kind') {
@@ -2696,7 +2744,7 @@ function buildInfoUI(parentEl) {
     '<li><b>色点の表示</b> — マウスでは、カーソルを画面に入れると色点が現れ、サークルに近づけると白い輪が付きます。iPhone・iPad では常に表示（分割中は、最後に触れたタイムラインだけ）</li>' +
     '<li><b>色点をドラッグ</b> — タイミング（円周上の位置）を変える</li>' +
     '<li><b>色点を円の外へドラッグ</b> — 削除（最低2点は残ります）</li>' +
-    '<li><b>色点をタップ（マウスはダブルクリック）</b> — 色選びのパネルで色を変更（面で彩度と明るさ、帯で色相）</li>' +
+    '<li><b>色点をタップ（マウスはダブルクリック）</b> — 色選びで色を変更（面で彩度と明るさ、帯で色相）。iPhone・iPad では画面の下からせり出し、上の何もない所を押すと閉じます</li>' +
     '<li><b>リングの帯をタップ</b> — その位置に色点を追加</li>' +
     '<li><b>白い針（再生ヘッド）をドラッグ</b> — 再生位置を動かす</li>' +
     '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ　<b>↻ボタン</b> — 回転の向きを逆にする（針の位置はそのまま）</li>' +

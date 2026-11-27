@@ -2325,6 +2325,21 @@ function hostSendConfig(q) {
   } catch (err) {}
 }
 
+// 読み込みが済んだ枠へ、隣と対角の枠の最新の設定を渡す。
+// 分割した直後に隣が送った設定は、新しい枠がまだ読み込み中で届かないため（隣は設定が変わるまで送り直さない）
+function hostSendNeighborSpecs(q) {
+  let w = q.frame.contentWindow;
+  EDGE_SIDES.forEach(function (k) {
+    (q.nb[k] || []).forEach(function (m, i) {
+      if (m.pane && m.pane.spec) { try { w.postMessage({ type: 'nb', side: k, idx: i, spec: m.pane.spec }, '*'); } catch (err) {} }
+    });
+  });
+  EDGE_CORNERS.forEach(function (c) {
+    let o = q.diag && q.diag[c];
+    if (o && o.spec) { try { w.postMessage({ type: 'nbd', corner: c, spec: o.spec }, '*'); } catch (err) {} }
+  });
+}
+
 function hostBroadcast(msg) {
   hostPanes.forEach(function (q) { try { q.frame.contentWindow.postMessage(msg, '*'); } catch (err) {} });
 }
@@ -2336,6 +2351,7 @@ function onHostMessage(ev) {
     // タイムラインの設定を、辺を共有する隣へ中継する（相手から見た側の名前と、その辺での並び順で送る）
     let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
     if (me) {
+      me.spec = d.spec;   // 後から読み込まれる枠へ渡せるよう、最新の設定を覚えておく
       [['L', 'R'], ['R', 'L'], ['T', 'B'], ['B', 'T']].forEach(function (pr) {
         me.nb[pr[0]].forEach(function (m) {
           let o = m.pane, idx = -1;
@@ -2354,7 +2370,7 @@ function onHostMessage(ev) {
   }
   if (d.type === 'ready') {
     let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
-    if (me) { hostSendConfig(me); }
+    if (me) { hostSendConfig(me); hostSendNeighborSpecs(me); }
     ev.source.postMessage({ type: 'wake', state: wakeState }, '*');
     if (playMode) { ev.source.postMessage({ type: 'setPlay', on: true }, '*'); }
   } else if (d.type === 'state') {

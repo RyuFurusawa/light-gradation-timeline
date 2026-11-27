@@ -412,7 +412,10 @@ let points = [];
 let mode = 'oklabLin';       // step | hsb | rgbLight | rgbValue | oklch | oklabLin | cielch | cielabLin
 let loopDur = 12;
 let hdrGain = 1.6;          // HDR時の輝度倍率（SDR白=1.0を超える持ち上げ）
-let t0 = 0, paused = false, pausedAt = 0;
+let t0 = 0, paused = false, pausedAt = 0;   // t0・pausedAt は clockMs() の時刻（全枠で共通の絶対時刻 ms）
+// 今のコマの時刻。描画中は全枠で同じ値（下の tick() が画面更新ごとに決める）、それ以外は今の時刻
+let frameClock = null;
+function clockMs() { return frameClock !== null ? frameClock : performance.timeOrigin + performance.now(); }
 
 let cx, cy, R, hitR = 24, isCoarse = false;
 /* リングまわりの寸法（ここを変えれば見た目を調整できる）
@@ -497,7 +500,7 @@ function setup() {
 
   buildUI();
   initWakeLock();
-  t0 = millis();
+  t0 = clockMs();
   initPaneMessaging();
   applyStateFromHash();
 
@@ -516,7 +519,20 @@ function setup() {
   }
 
   noLoop();
-  setInterval(function () { try { redraw(); } catch (err) { showErr(err); } }, 33);
+  // 同じページの枠（iframe）は同じ画面更新で rAF が呼ばれ、時刻もそろう。それを 30 コマ/秒の刻みに丸めて描く。
+  // 全枠が同じ時刻で自分と隣の色を計算するので、境界の両側で色がずれない（以前は隣の色が1〜2コマ遅れて届き、境界に段差が出た）
+  const TICK_MS = 1000 / 30;
+  let lastTick = -1;
+  (function tick(ts) {
+    requestAnimationFrame(tick);
+    if (ts === undefined) { return; }
+    let k = Math.floor((performance.timeOrigin + ts) / TICK_MS);
+    if (k === lastTick) { return; }
+    lastTick = k;
+    frameClock = k * TICK_MS;
+    try { redraw(); } catch (err) { showErr(err); }
+    frameClock = null;
+  })();
 }
 
 function showErr(err) {
@@ -588,14 +604,14 @@ function resizeGpu() {
 }
 
 function getPhase() {
-  let now = paused ? pausedAt : millis();
+  let now = paused ? pausedAt : clockMs();
   let p = ((now - t0) / 1000) / loopDur;
   if (reversed) { p = -p; }
   return p - Math.floor(p);
 }
 // 位相（0..1、円周上の位置）を直接指定する。回転方向によらず同じ位置になる
 function setPhase(ph) {
-  let now = paused ? pausedAt : millis();
+  let now = paused ? pausedAt : clockMs();
   t0 = now - (reversed ? (1 - ph) : ph) * loopDur * 1000;
 }
 // 回転方向を逆にする（針の位置はそのまま、進む向きだけ変わる）
@@ -622,8 +638,14 @@ function draw() {
   let a = getPhase() * TWO_PI - HALF_PI;
   let cur = sampleAt(a, sorted);
 
-  // 境界グラデーション中は、自分の現在色（とHDRゲイン）を親経由で隣へ知らせる
-  if (blendOn) { toHost({ type: 'color', rgb: [cur[0], cur[1], cur[2]], gain: outGain() }); }
+  // 境界グラデーション中は、自分のタイムラインの設定が変わったときだけ、親経由で隣へ知らせる。
+  // 隣はそれを使って、同じコマの時刻で自分の色を計算する（evalSpec）。隣の色もここで今のコマの時刻で計算する
+  if (blendOn) {
+    let sp = JSON.stringify(mySpec());
+    if (sp !== lastSpecSent) { lastSpecSent = sp; toHost({ type: 'spec', spec: JSON.parse(sp) }); }
+    EDGE_SIDES.forEach(function (k) { nb[k].forEach(function (sg) { sg.c = evalSpec(sg.spec); }); });
+    EDGE_CORNERS.forEach(function (c) { diag[c] = evalSpec(diagSpec[c]); });
+  }
 
   // 現在色を選ばれたレンダラで画面全体に描く（HDR失敗時はP3/sRGBへ自動降格）
   try {
@@ -651,16 +673,18 @@ function draw() {
 /* ---------------- 共通ロジック ---------------- */
 function wrapAng(x) { return ((x % TWO_PI) + TWO_PI) % TWO_PI; }
 
-function sortPoints() {
+function sortPoints(pts) {
+  pts = pts || points;
   let arr = [];
-  for (let i = 0; i < points.length; i++) { arr.push({ i: i, a: wrapAng(points[i].ang) }); }
+  for (let i = 0; i < pts.length; i++) { arr.push({ i: i, a: wrapAng(pts[i].ang) }); }
   arr.sort(function (x, y) { return x.a - y.a; });
   return arr;
 }
 
-function sampleAt(angle, sorted) {
+function sampleAt(angle, sorted, pts) {
+  pts = pts || points;
   let A = wrapAng(angle), n = sorted.length;
-  if (n === 1) { let p = points[sorted[0].i]; return [p.r, p.g, p.b]; }
+  if (n === 1) { let p = pts[sorted[0].i]; return [p.r, p.g, p.b]; }
   let idx = -1;
   for (let k = 0; k < n; k++) { if (sorted[k].a <= A) { idx = k; } }
   let cur, nxt;
@@ -669,7 +693,7 @@ function sampleAt(angle, sorted) {
   let span = wrapAng(nxt.a - cur.a);
   if (span === 0) { span = TWO_PI; }
   let f = wrapAng(A - cur.a) / span;
-  return interp(points[cur.i], points[nxt.i], f);
+  return interp(pts[cur.i], pts[nxt.i], f);
 }
 
 function interp(pa, pb, f) {
@@ -813,6 +837,30 @@ function hexToRgb(hx) {
   return [parseInt(hx.substr(0,2),16), parseInt(hx.substr(2,2),16), parseInt(hx.substr(4,2),16)];
 }
 function hex2(n) { let s = Math.round(constrain(n, 0, 255)).toString(16); return s.length < 2 ? '0' + s : s; }
+
+/* ---------------- 隣の枠のタイムライン ----------------
+   隣の色は送ってもらわず、隣のタイムラインの設定（色点・秒数・位相の起点・一時停止・向き・ゲイン）から、
+   自分の描画と同じコマの時刻で計算する。補間方式は全枠共通 */
+let lastSpecSent = '', diagSpec = { TL: null, TR: null, BL: null, BR: null };
+function mySpec() {
+  return {
+    pts: points.map(function (q) { return [q.ang, q.r, q.g, q.b]; }),
+    dur: loopDur, t0: t0, paused: paused, pausedAt: pausedAt, rev: reversed, gain: outGain()
+  };
+}
+function evalSpec(sp) {
+  if (!sp || !Array.isArray(sp.pts) || sp.pts.length < 1) { return null; }
+  if (!sp._pts) {
+    sp._pts = sp.pts.map(function (a) { return { ang: +a[0], r: +a[1], g: +a[2], b: +a[3] }; });
+    sp._sorted = sortPoints(sp._pts);
+  }
+  let now = sp.paused ? sp.pausedAt : clockMs();
+  let p = ((now - sp.t0) / 1000) / sp.dur;
+  if (sp.rev) { p = -p; }
+  p -= Math.floor(p);
+  let c = sampleAt(p * TWO_PI - HALF_PI, sp._sorted, sp._pts);
+  return { r: c[0], g: c[1], b: c[2], gain: +sp.gain || 1 };
+}
 
 /* ---------------- 境界グラデーション ----------------
    隣り合う枠の現在色どうしを、選択中の補間方式（全枠共通）で空間的につなぐ。左右にも上下にも働く。
@@ -1667,21 +1715,22 @@ function initPaneMessaging() {
         let segs = (blendOn && d.segs && Array.isArray(d.segs[k])) ? d.segs[k] : [];
         let old = nb[k];
         nb[k] = segs.slice(0, EDGE_MAXS).map(function (sg, i) {
-          let keep = (old.length === segs.length && old[i]) ? old[i].c : null;
-          return { a0: +sg[0], a1: +sg[1], c: keep };
+          let keep = (old.length === segs.length && old[i]) ? old[i].spec : null;
+          return { a0: +sg[0], a1: +sg[1], spec: keep, c: null };
         });
       });
       EDGE_CORNERS.forEach(function (c) {
         cornerOn[c] = !!(blendOn && d.corners && d.corners[c]);
-        if (!cornerOn[c]) { diag[c] = null; }
+        if (!cornerOn[c]) { diag[c] = null; diagSpec[c] = null; }
       });
+      lastSpecSent = '';   // 隣の顔ぶれが変わったかもしれないので、自分の設定を送り直す
     }
-    else if (d.type === 'nbd' && Array.isArray(d.rgb) && diag.hasOwnProperty(d.corner)) {
-      diag[d.corner] = { r: +d.rgb[0], g: +d.rgb[1], b: +d.rgb[2], gain: +d.gain || 1 };
+    else if (d.type === 'nbd' && d.spec && diagSpec.hasOwnProperty(d.corner)) {
+      diagSpec[d.corner] = d.spec;
     }
-    else if (d.type === 'nb' && Array.isArray(d.rgb) && nb.hasOwnProperty(d.side)) {
+    else if (d.type === 'nb' && d.spec && nb.hasOwnProperty(d.side)) {
       let sg = nb[d.side][d.idx | 0];
-      if (sg) { sg.c = { r: +d.rgb[0], g: +d.rgb[1], b: +d.rgb[2], gain: +d.gain || 1 }; }
+      if (sg) { sg.spec = d.spec; }
     }
   });
   let lastHover = 0;
@@ -1725,7 +1774,7 @@ function applyStateFromHash() {
   showLumaCheck = !!st.showLumaCheck; if (showLumaCheck) { checkBtn.addClass('active'); }
   let ph = +st.phase || 0;
   if (st.paused) {
-    paused = true; pausedAt = millis();
+    paused = true; pausedAt = clockMs();
     syncPauseIcon();
   } else if (isFinite(st.at)) {
     ph += (st.reversed ? -1 : 1) * (Date.now() - st.at) / (loopDur * 1000);
@@ -2066,21 +2115,21 @@ function hostBroadcast(msg) {
 function onHostMessage(ev) {
   let d = ev.data;
   if (!d || !hostPanes.some(function (q) { return q.frame.contentWindow === ev.source; })) { return; }
-  if (d.type === 'color') {
-    // 現在色を、辺を共有する隣へ中継する（相手から見た側の名前と、その辺での並び順で送る）
+  if (d.type === 'spec') {
+    // タイムラインの設定を、辺を共有する隣へ中継する（相手から見た側の名前と、その辺での並び順で送る）
     let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
     if (me) {
       [['L', 'R'], ['R', 'L'], ['T', 'B'], ['B', 'T']].forEach(function (pr) {
         me.nb[pr[0]].forEach(function (m) {
           let o = m.pane, idx = -1;
           o.nb[pr[1]].forEach(function (r, i) { if (r.pane === me) { idx = i; } });
-          if (idx >= 0) { try { o.frame.contentWindow.postMessage({ type: 'nb', side: pr[1], idx: idx, rgb: d.rgb, gain: d.gain }, '*'); } catch (err) {} }
+          if (idx >= 0) { try { o.frame.contentWindow.postMessage({ type: 'nb', side: pr[1], idx: idx, spec: d.spec }, '*'); } catch (err) {} }
         });
       });
       // 4枠が集まる角の対角の枠へも送る
       hostPanes.forEach(function (q) {
         EDGE_CORNERS.forEach(function (c) {
-          if (q.diag && q.diag[c] === me) { try { q.frame.contentWindow.postMessage({ type: 'nbd', corner: c, rgb: d.rgb, gain: d.gain }, '*'); } catch (err) {} }
+          if (q.diag && q.diag[c] === me) { try { q.frame.contentWindow.postMessage({ type: 'nbd', corner: c, spec: d.spec }, '*'); } catch (err) {} }
         });
       });
     }
@@ -2127,8 +2176,8 @@ function hostSetPlay(on, fsDone) {
 const ICON_PAUSE = '<svg class="ico" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="1.5" width="2.8" height="9" rx="0.8"/><rect x="7.2" y="1.5" width="2.8" height="9" rx="0.8"/></svg>';
 const ICON_PLAY = '<svg class="ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.6v8.8c0 .5.5.8.9.5l6.6-4.4a.6.6 0 0 0 0-1L3.9 1.1c-.4-.3-.9 0-.9.5z"/></svg>';
 function togglePause() {
-  if (!paused) { pausedAt = millis(); paused = true; }
-  else { t0 += millis() - pausedAt; paused = false; }
+  if (!paused) { pausedAt = clockMs(); paused = true; }
+  else { t0 += clockMs() - pausedAt; paused = false; }
   syncPauseIcon();
 }
 function syncPauseIcon() {

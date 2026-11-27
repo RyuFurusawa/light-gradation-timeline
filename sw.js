@@ -1,8 +1,9 @@
 /* 光のグラデーション・タイムライン：サービスワーカー
    目的は「一度開いた端末ならオフラインでも起動できる」ことだけ。
-   ・自サイトのファイルはネットワーク優先（公開版の更新をすぐ反映）、届かないときだけキャッシュ
+   ・自サイトのファイルはネットワーク優先（公開版の更新をすぐ反映）、届かないときだけキャッシュ。
+     ブラウザの HTTP キャッシュも毎回サーバーに確かめる（no-cache）。親ページと枠（iframe）で版が食い違わないように
    ・p5.js（版番号つきCDN）は中身が変わらないのでキャッシュ優先 */
-const CACHE = 'lgt-v1';
+const CACHE = 'lgt-v2';
 const P5 = 'https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js';
 const SHELL = ['./', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
@@ -41,7 +42,11 @@ self.addEventListener('fetch', function (ev) {
 
   if (new URL(req.url).origin !== self.location.origin) { return; }
 
-  ev.respondWith(fetch(req).then(function (r) {
+  // ナビゲーション（親ページ・枠の iframe）は Request を作り直せないので URL で取り直す
+  const fresh = (req.mode === 'navigate')
+    ? fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
+    : fetch(new Request(req, { cache: 'no-cache' }));
+  ev.respondWith(fresh.then(function (r) {
     if (r.ok) {
       const copy = r.clone();
       caches.open(CACHE).then(function (c) { c.put(req, copy); });

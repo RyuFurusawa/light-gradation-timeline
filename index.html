@@ -271,6 +271,30 @@
   body.compact #timeBar input[type=range] { display: none; }
   body.compact .bar button, body.compact .bar span { white-space: nowrap; }
   body.compact #colorBar { max-width: calc(100vw - 16px); justify-content: center; box-sizing: border-box; }
+  /* ---- 子ページ側：ごく小さい枠（mini）。上の時間バーを外し、リングの下に ⏸ と ⋯ だけを並べる。
+     ⋯ を押すと枠全体にシート（#sheet）が重なり、時間・観察・色の設定が縦に並ぶ（入りきらなければスクロール） ---- */
+  #miniPause {
+    position: fixed; z-index: 12; display: none;
+    width: 38px; height: 38px; border-radius: 50%; padding: 0;
+    background: rgba(15,15,18,0.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.28); color: #fff;
+    font: 14px/1 system-ui, -apple-system, sans-serif; cursor: pointer;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.3); transform: translateX(-50%);
+  }
+  #miniPause:hover { background: rgba(255,255,255,0.22); }
+  body.mini #miniPause { display: block; }
+  body.play #miniPause { display: none; }
+  body.mini:not(.moreOpen) #timeBar { display: none; }
+  #sheet {
+    position: fixed; inset: 0; z-index: 11; display: none;
+    flex-direction: column; align-items: center; gap: 8px;
+    padding: 30px 8px 76px; box-sizing: border-box; overflow-y: auto;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  #sheet.open { display: flex; }
+  #sheet::before, #sheet::after { content: ''; flex: 1 0 0; }   /* 入りきるときは上下中央、あふれるときは上から */
+  #sheet .bar { position: static !important; transform: none !important; flex-wrap: wrap !important;
+    justify-content: center; max-width: 100%; box-sizing: border-box; }
   #errbox {
     position: absolute; left: 12px; top: 12px; z-index: 99; display: none;
     max-width: 60vw; padding: 10px 12px; border-radius: 10px;
@@ -306,7 +330,7 @@ const IS_HOST = !IS_PANE;
 let hostPanes = [], hostStateWaiters = {}, hostReqId = 0;
 let gainSlider = null;
 let reversed = false, revBtn = null;       // 回転（読み取り）方向の逆転。false＝時計回り
-let sharedUI = false, moreBtn = null;      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
+let sharedUI = false, moreBtn = null, miniPause = null, sheetEl = null;      // 子：分割中は方式・フルスクリーン・ヘルプを親の共通バーに任せる
 // 境界グラデーション。子：隣の現在色（線形×ゲイン）を受け取り、枠の端へ向けて混ぜる
 // nb[側] ＝ その辺に接する隣の枠の並び。各要素 { a0, a1：辺の上での区間（0..1）, c：現在色 }
 let blendOn = false, blendWidth = 1, nb = { L: [], R: [], T: [], B: [] };
@@ -424,10 +448,25 @@ function showErr(err) {
 // 簡略表示にする条件：分割中で、枠が細いか低いとき
 function isCompact() { return sharedUI && (window.innerWidth <= 820 || window.innerHeight <= 700); }
 // 簡略表示の時間バーの上端。上辺の＋タブ（20px）と共通バーを避け、細い枠では左上の×の下へ逃がす
-function compactTimeTop() { return topInset + 26 + (width < 320 ? 40 : 0); }
+function compactTimeTop() { return topInset + 26; }
+// ごく小さい枠：幅が 320px 未満か、簡略表示でもリングが小さくなりすぎる（半径 70 未満）とき
+function isMini() {
+  if (!isCompact()) { return false; }
+  let A = compactTimeTop() + 48 + 34, B = height - 96;
+  return width < 320 || Math.min(width * 0.38, (B - A) / 2) < 70;
+}
 function layout() {
   cx = width / 2; cy = height / 2;
-  if (isCompact()) {
+  let mini = isMini();
+  document.body.classList.toggle('compact', isCompact());
+  document.body.classList.toggle('mini', mini);
+  syncSheet();
+  if (mini) {
+    // 上端は＋タブと針のノブ、下端は＋タブ・⏸⋯の列・ノブのぶん空けて、収まる最大のリング。左右も＋タブを避ける
+    let A = topInset + 26 + 26, B = height - 98;
+    R = Math.max(14, Math.min(width / 2 - 32, (B - A) / 2));
+    cy = (A + B) / 2;
+  } else if (isCompact()) {
     // 時間バーの下から「⋯」の上までに、針のノブ（R+26）ごと収まる最大のリングを置く。
     // 「⋯」を開いているときは、下から積むパネルの上に「⋯」ごと収まるよう縮める
     let A = compactTimeTop() + 48 + 34, B = height - 96;
@@ -453,6 +492,15 @@ function placeBars() {
   let topGap = cy - R;
   let botGap = height - (cy + R);
 
+  // ごく小さい枠：リングの下に ⏸ と ⋯ を並べる（バーはシートの中か、隠れている）
+  if (document.body.classList.contains('mini')) {
+    // シートを開いているあいだは、列を枠の下端へ寄せる（シートの中身と重ならないように）
+    let ry = document.body.classList.contains('moreOpen') ? height - 38 - 10 : Math.round(Math.min(cy + R + 30, height - 26 - 38));
+    if (moreBtn) { moreBtn.style.top = ry + 'px'; moreBtn.style.left = Math.round(cx + 23) + 'px'; }
+    if (miniPause) { miniPause.style.top = ry + 'px'; miniPause.style.left = Math.round(cx - 23) + 'px'; }
+    return;
+  }
+  if (moreBtn) { moreBtn.style.left = '50%'; }
   // 簡略表示：上に秒数と一時停止、サークルの下に「⋯」。開いたときだけ観察トグルと色設定を出す
   if (document.body.classList.contains('compact')) {
     timeBar.elt.style.top = compactTimeTop() + 'px'; timeBar.elt.style.bottom = 'auto';
@@ -1341,6 +1389,8 @@ function applyPlay(on) {
   document.body.classList.toggle('play', on);
   if (on) {
     playMode = true;
+    document.body.classList.remove('moreOpen');
+    syncSheet();
     topBar.hide(); timeBar.hide(); colorBar.hide(); viewBar.hide();
     if (infoBtn) { infoBtn.style.display = 'none'; }
     if (infoPanel) { infoPanel.style.display = 'none'; }
@@ -1447,7 +1497,7 @@ function applyStateFromHash() {
   let ph = +st.phase || 0;
   if (st.paused) {
     paused = true; pausedAt = millis();
-    pauseBtn.html('▶');
+    syncPauseIcon();
   } else if (isFinite(st.at)) {
     ph += (st.reversed ? -1 : 1) * (Date.now() - st.at) / (loopDur * 1000);
     ph -= Math.floor(ph);
@@ -1554,6 +1604,7 @@ function makePane(state) {
     b.setAttribute('aria-label', b.title);
     b.addEventListener('click', function () { b.blur(); addPane(pane, d[1]); });
     div.appendChild(b);
+    pane['split' + d[0]] = b;
   });
   wrap.appendChild(div);
   hostPanes.push(pane);
@@ -1612,8 +1663,10 @@ function addPane(pane, side) {
 }
 
 // 節が収まるのに必要な最小の寸法（axis：'w' または 'h'）。枠1つは 220×320
+// 枠の最小寸法（＋で二分できる下限、境界のドラッグの下限）
+const PANE_MIN_W = 120, PANE_MIN_H = 150;
 function hostMinSize(node, axis) {
-  if (node.pane) { return axis === 'w' ? 220 : 320; }
+  if (node.pane) { return axis === 'w' ? PANE_MIN_W : PANE_MIN_H; }
   let a = hostMinSize(node.a, axis), b = hostMinSize(node.b, axis);
   return ((node.dir === 'row') === (axis === 'w')) ? a + b : Math.max(a, b);
 }
@@ -1686,11 +1739,17 @@ function hostLayoutPanes() {
     };
   });
   // 上端が共通バーにかかる枠は、中身と×を下げる（バーの下端＋8px から時間バーが始まるように）
-  let barBottom = hostBar ? Math.round(hostBar.getBoundingClientRect().bottom) : 66;
-  if (!barBottom) { barBottom = 66; }
+  // 横方向にもバーと重なる枠だけ（左右の端の細い枠はバーの下にないので下げない）
+  let br = hostBar ? hostBar.getBoundingClientRect() : null;
+  let barBottom = (br && br.bottom) ? Math.round(br.bottom) : 66;
+  let barL = (br && br.width) ? br.left - 8 : 0, barR = (br && br.width) ? br.right + 8 : window.innerWidth;
   hostPanes.forEach(function (q) {
-    q.top = (q.rect.y < barBottom) ? Math.max(0, barBottom + 8 - 26 - q.rect.y) : 0;
+    let under = q.rect.y < barBottom && q.rect.x < barR && q.rect.x + q.rect.w > barL;
+    q.top = under ? Math.max(0, barBottom + 8 - 26 - q.rect.y) : 0;
     q.closeBtn.style.top = (q.top + 26) + 'px';
+    // 二分すると最小寸法を下回る側の＋は出さない
+    q.splitL.style.display = q.splitR.style.display = (q.rect.w / 2 < PANE_MIN_W) ? 'none' : '';
+    q.splitT.style.display = q.splitB.style.display = (q.rect.h / 2 < PANE_MIN_H) ? 'none' : '';
   });
 }
 
@@ -1830,7 +1889,26 @@ function hostSetPlay(on, fsDone) {
 function togglePause() {
   if (!paused) { pausedAt = millis(); paused = true; }
   else { t0 += millis() - pausedAt; paused = false; }
+  syncPauseIcon();
+}
+function syncPauseIcon() {
   pauseBtn.html(paused ? '▶' : '⏸');
+  if (miniPause) { miniPause.textContent = paused ? '▶' : '⏸'; }
+}
+// ごく小さい枠で ⋯ を開いているあいだは、時間・観察・色のバーをシートの中へ移す。閉じたら戻す
+function syncSheet() {
+  if (!sheetEl || !timeBar) { return; }
+  let open = document.body.classList.contains('mini') && document.body.classList.contains('moreOpen') && !playMode;
+  let bars = [timeBar.elt, viewBar.elt, colorBar.elt];
+  if (open && timeBar.elt.parentNode !== sheetEl) {
+    bars.forEach(function (b) { sheetEl.appendChild(b); });
+  } else if (!open && timeBar.elt.parentNode === sheetEl) {
+    bars.forEach(function (b) { document.body.insertBefore(b, sheetEl); });
+  }
+  // 上は親の×（topInset+26 から 32px）、下は ⏸ ⋯ の列のぶん空ける
+  sheetEl.style.paddingTop = (topInset + 66) + 'px';
+  sheetEl.style.paddingBottom = '58px';
+  sheetEl.classList.toggle('open', open);
 }
 
 /* ---------------- 画面スリープ防止（Screen Wake Lock） ----------------
@@ -2257,8 +2335,10 @@ function applyResponsive() {
   isNarrow = window.innerWidth <= 820;
   if (isNarrow) { document.body.classList.add('narrowLayout'); }
   else { document.body.classList.remove('narrowLayout'); }
-  // 分割中の細い枠は簡略表示にする
+  // 分割中の細い枠は簡略表示に、ごく小さい枠はさらに簡略にする
   document.body.classList.toggle('compact', isCompact());
+  document.body.classList.toggle('mini', isMini());
+  syncSheet();
   placeBars();
 }
 
@@ -2363,7 +2443,22 @@ function buildUI() {
   document.body.appendChild(moreBtn);
   moreBtn.addEventListener('click', function () {
     document.body.classList.toggle('moreOpen');
-    layout();   // パネルのぶんリングの大きさが変わる
+    layout();   // パネルのぶんリングの大きさが変わる（ごく小さい枠ではシートを出し入れする）
+  });
+
+  // ---- ごく小さい枠：一時停止の丸ボタンと、設定のシート ----
+  miniPause = document.createElement('button');
+  miniPause.id = 'miniPause';
+  miniPause.textContent = '\u23f8';
+  miniPause.title = '一時停止／再開'; miniPause.setAttribute('aria-label', '一時停止／再開');
+  document.body.appendChild(miniPause);
+  miniPause.addEventListener('click', function () { miniPause.blur(); togglePause(); });
+  sheetEl = document.createElement('div');
+  sheetEl.id = 'sheet';
+  document.body.appendChild(sheetEl);
+  // シートの何もない所を押すと閉じる
+  sheetEl.addEventListener('click', function (ev) {
+    if (ev.target === sheetEl) { document.body.classList.remove('moreOpen'); layout(); }
   });
 
   // すべてのUIが揃ってから配置を確定する（生成前に呼ぶと位置が決まらない）
@@ -2431,7 +2526,7 @@ function buildInfoUI(parentEl) {
     '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
     '<li><b>枠の四辺にある ＋</b> — その枠を二分して、押した側に複製を置く（左右にも上下にも、何度でも分けられます。ほかの枠の大きさは変わりません）。<b>左上の ×</b> でその枠を閉じる。<b>境界の白いつまみ</b>をドラッグすると比率を変えられます（ダブルクリックで半々に戻す）。分割中は、ポインタを置いた（タッチでは触れた）枠の ＋ と × だけが出ます</li>' +
     '<li><b>上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。1つの辺に複数のタイムラインが接するところは、区間ごとに相手を替えてつなぎます。中間混色の方式では、4つのタイムラインが集まる角も4色をなめらかに混ぜます。横のスライダーは幅（右端＝枠の中央まで）</li>' +
-    '<li><b>⋯</b>（画面や枠が小さいとき）— xy色度図・輝度検証・色の設定を開閉</li>' +
+    '<li><b>⋯</b>（画面や枠が小さいとき）— xy色度図・輝度検証・色の設定を開閉。ごく小さい枠では、リングの下の <b>⏸</b> で一時停止、<b>⋯</b> で秒数・逆転も含めた設定を枠全体に開きます</li>' +
     '</ul>' +
     '<h3>パネル</h3>' +
     '<ul>' +

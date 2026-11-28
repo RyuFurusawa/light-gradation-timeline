@@ -275,7 +275,7 @@
     #hostBar #fsBtn { padding: 8px 11px; }
     #hostBar #fsBtn .lbl, #blendBtn .lbl2 { display: none; }
     #blendBtn, #globalBtn { padding: 8px 12px; font-size: 12.5px; }
-    #blendW { width: 56px; }
+    #blendW { width: 72px; }
   }
   body.playing #hostBar { display: none; }
   body.host #modeSwitch, body.host #fsBtn, body.host #infoBtn { position: static; transform: none; }
@@ -289,7 +289,7 @@
   }
   #blendBtn:hover, #globalBtn:hover { background: rgba(255,255,255,0.18); }
   #blendBtn.active, #globalBtn.active { background: #f5f5f5; color: #111; border-color: #f5f5f5; }
-  #blendW { width: 80px; accent-color: #f5f5f5; display: none; }
+  #blendW { width: 110px; accent-color: #f5f5f5; display: none; }
   body.multi #blendBtn.active + #blendW { display: block; }
   /* 全体の色（分割中だけ）：HDR輝度と知覚明度統一を、全部の枠へまとめて適用する */
   #globalBtn { display: none; }
@@ -973,7 +973,7 @@ function evalSpec(sp) {
    隣り合う枠の現在色どうしを、選択中の補間方式（全枠共通）で空間的につなぐ。左右にも上下にも働く。
    枠の中央＝自分の色（補間の f=0）、境界＝ちょうど中間（f=0.5）、その先は隣の枠が引き継ぐ。
    両側の枠が同じ2色・同じ方式で計算するので、境界で色が一致する（隣の色は1フレーム遅れで届く）。
-   幅 blendWidth=1 で枠の中央まで、小さいほど境界付近だけ。ステップ切替は補間しないので、境界は切り替わったまま。
+   幅 blendWidth=1 で枠の中央まで、小さいほど境界付近だけ。1〜2 は中央までのまま、終わり方をゆるめて広く見せる（edgeA）。ステップ切替は補間しないので、境界は切り替わったまま。
    方式ごとの道筋は曲がるので、EDGE_N 区間の表（線形×ゲイン）にしてレンダラへ渡し、表のあいだは光量で線形補間する。
 
    T字の境界（1つの辺に複数の枠が接する）：辺の区間ごとに相手を替え、相手ごとの表を持つ。
@@ -1084,7 +1084,12 @@ function edgeLuts(rgb) {
 // 帯の中の位置 k（0＝境界、1＝帯の外）のなだらかな終わり方。f(k) = 2k − k²
 // 帯の端（k=1）で傾きが0になるので、グラデーションが急に途切れて線に見える（マッハバンド）ことがない。
 // 境界（k=0）では値も傾きも左右対称のままなので、隣の枠とは傾きまでなめらかにつながる。WGSL 側にも同じ式がある
-function edgeEase(k) { return k * (2 - k); }
+// 幅のスライダーは 0.05〜2。1 までは帯の幅（1＝枠の中央まで）。1 を超えた分は、帯は中央までのまま、
+// 終わり方をゆるめて、隣の色が中央近くまで広く入り込むようにする。f(k) = 1 − (1 − k)²(1 + a·k)、a：0→1.5（a=0 で 2k − k²）
+// 中央（k=1）で傾きは 0、曲がり方も有限のまま（線に見えない）。a≦2 なら単調。境界では両側が同じ a を使うので、傾きまでつながる
+function edgeBand() { return Math.min(blendWidth, 1); }
+function edgeA() { return blendWidth <= 1 ? 0 : 1.5 * Math.min(blendWidth - 1, 1); }
+function edgeEase(k) { let m = 1 - k; return 1 - m * m * (1 + edgeA() * k); }
 // 区間 [a0, a1] の重み。pos は辺に沿った位置（0..1）、h はぼかしの半幅（同じ単位）。
 // 隣り合う区間の重みの和は 1 になる。WGSL 側にも同じ式がある
 function edgeSegW(pos, a0, a1, h) {
@@ -1110,7 +1115,7 @@ function edgeColorAt(x, y, self, luts, W, H) {
     if (tjl && tjl.length) {
       for (let j = 0; j < tjl.length; j++) {
         let t = tjl[j], d = pos - t.pos;
-        let kk = edgeEase(constrain(Math.abs(d) * 2 / (blendWidth * (d <= 0 ? t.wp : t.wn)), 0, 1));
+        let kk = edgeEase(constrain(Math.abs(d) * 2 / (edgeBand() * (d <= 0 ? t.wp : t.wn)), 0, 1));
         if (kk < 1) { return cornerAt(d <= 0 ? t.lutL : t.lutR, kk, k); }
       }
       h = 1e-6;
@@ -1123,7 +1128,7 @@ function edgeColorAt(x, y, self, luts, W, H) {
     return ws > 1e-6 ? [acc[0] / ws, acc[1] / ws, acc[2] / ws] : null;
   }
   let ex = Math.min(x, 1 - x), ey = Math.min(y, 1 - y);
-  let kx = edgeEase(constrain(ex * 2 / blendWidth, 0, 1)), ky = edgeEase(constrain(ey * 2 / blendWidth, 0, 1));
+  let kx = edgeEase(constrain(ex * 2 / edgeBand(), 0, 1)), ky = edgeEase(constrain(ey * 2 / edgeBand(), 0, 1));
   // ぼかしの半幅：境界からの距離（画素）を、辺に沿った長さで割る
   let tj = luts.tj || {};
   let ch = side(x > 0.5 ? luts.R : luts.L, kx, y, Math.max(ex * W / H, 1e-6), x > 0.5 ? tj.R : tj.L);
@@ -1330,7 +1335,7 @@ function makeWebGPURenderer(device, ctx, format) {
     '    if (d <= 0.0) { w = t.y; q = 0u; }\n' +
     '    if (w > 0.0) {\n' +
     '      let k0 = clamp(abs(d) * 2.0 / (u.flags.w * w), 0.0, 1.0);\n' +
-    '      let kk = k0 * (2.0 - k0);\n' +
+    '      let kk = 1.0 - (1.0 - k0) * (1.0 - k0) * (1.0 + u.flags.z * k0);\n' +
     '      if (kk < 1.0) { return vec4<f32>(cornerAt(4u + (s * ' + (EDGE_MAXS - 1) + 'u + j) * 2u + q, kk, k), 1.0); }\n' +
     '    }\n' +
     '  }\n' +
@@ -1388,7 +1393,7 @@ function makeWebGPURenderer(device, ctx, format) {
     '    let ex = min(x, 1.0 - x); let ey = min(y, 1.0 - y);\n' +
     '    let kx0 = clamp(ex * 2.0 / u.flags.w, 0.0, 1.0);\n' +   // 0=境界, 1=帯の外
     '    let ky0 = clamp(ey * 2.0 / u.flags.w, 0.0, 1.0);\n' +
-    '    let kx = kx0 * (2.0 - kx0); let ky = ky0 * (2.0 - ky0);\n' +   // なだらかな終わり方（JS側の edgeEase と同じ）
+    '    let kx = 1.0 - (1.0 - kx0) * (1.0 - kx0) * (1.0 + u.flags.z * kx0); let ky = 1.0 - (1.0 - ky0) * (1.0 - ky0) * (1.0 + u.flags.z * ky0);\n' +   // なだらかな終わり方（JS側の edgeEase と同じ）
     '    var hs = 0u; if (x > 0.5) { hs = 1u; }\n' +
     '    var vs = 2u; if (y > 0.5) { vs = 3u; }\n' +
     '    let hh = max(ex * u.size.x / u.size.y, 0.000001); let hv = max(ey * u.size.y / u.size.x, 0.000001);\n' +
@@ -1479,7 +1484,7 @@ function makeWebGPURenderer(device, ctx, format) {
         bgR, bgG, bgB, 1.0,
         gR, gG, gB, 1.0,
         rcx, rcy, rhw, rhh,
-        showGray, luts ? 1.0 : 0.0, 0.0, blendWidth,
+        showGray, luts ? 1.0 : 0.0, edgeA(), edgeBand(),
         Math.max(1, gpu.width), Math.max(1, gpu.height), 0.0, 0.0,
         luts ? luts.L.length : 0, luts ? luts.R.length : 0, luts ? luts.T.length : 0, luts ? luts.B.length : 0,
         lr * hdrGain, lg * hdrGain, lb * hdrGain, 1.0,
@@ -2040,7 +2045,7 @@ function initPaneMessaging() {
       lumaMode = k; setLumaSegActive();
     }
     else if (d.type === 'blend') {
-      blendOn = !!d.on; blendWidth = constrain(+d.width || 1, 0.05, 1);
+      blendOn = !!d.on; blendWidth = constrain(+d.width || 1, 0.05, 2);
       // 辺ごとの区間の並び。並びが同じなら届いている色を引き継ぐ（設定が来るたびに一瞬つながりが切れないように）
       EDGE_SIDES.forEach(function (k) {
         let segs = (blendOn && d.segs && Array.isArray(d.segs[k])) ? d.segs[k] : [];
@@ -2145,8 +2150,8 @@ function buildHost() {
   blendBtn.title = '隣り合うタイムラインの境界を、光のグラデーションでつなぐ';
   hostBar.appendChild(blendBtn);
   let bw = document.createElement('input');
-  bw.type = 'range'; bw.id = 'blendW'; bw.min = '0.05'; bw.max = '1'; bw.step = '0.05'; bw.value = String(blendWidth);
-  bw.title = 'グラデーションの幅（右端＝枠の中央まで）';
+  bw.type = 'range'; bw.id = 'blendW'; bw.min = '0.05'; bw.max = '2'; bw.step = '0.05'; bw.value = String(blendWidth);
+  bw.title = 'グラデーションの幅（真ん中＝枠の中央まで。それより右は、隣の色を中央近くまで広く入れる）';
   bw.setAttribute('aria-label', 'グラデーションの幅');
   hostBar.appendChild(bw);
   blendBtn.addEventListener('click', function () {
@@ -3373,7 +3378,7 @@ function buildInfoUI(parentEl) {
     '<li><b>スペースキー／⏸ボタン</b> — 一時停止・再開　<b>1周◯秒</b> — 一周の速さ　<b>↻ボタン</b> — 回転の向きを逆にする（針の位置はそのまま）</li>' +
     '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
     '<li><b>枠の四辺にある ＋</b> — その枠を二分して、押した側に複製を置く（左右にも上下にも、何度でも分けられます。ほかの枠の大きさは変わりません）。<b>左上の ×</b> でその枠を閉じる。<b>境界の白いつまみ</b>をドラッグすると比率を変えられます（ダブルクリックで半々に戻す）。分割中は、ポインタを置いた（タッチでは触れた）枠の ＋ と × だけが出ます</li>' +
-    '<li><b>上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。1つの辺に複数のタイムラインが接するところは、区間ごとに相手を替えてつなぎます。中間混色の方式では、3つ・4つのタイムラインが集まる点も色をなめらかに混ぜます（色相回転の方式では、その点だけ色が切り替わります）。横のスライダーは幅（右端＝枠の中央まで）</li>' +
+    '<li><b>上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。1つの辺に複数のタイムラインが接するところは、区間ごとに相手を替えてつなぎます。中間混色の方式では、3つ・4つのタイムラインが集まる点も色をなめらかに混ぜます（色相回転の方式では、その点だけ色が切り替わります）。横のスライダーは幅（真ん中＝枠の中央まで。それより右は、隣の色を中央近くまで広く入れます）</li>' +
     '<li><b>全体の色</b>（分割中だけ）— HDR輝度と知覚明度統一（最低・平均・彩度最大・戻る・この色で確定）を、全部のタイムラインへまとめて適用します。明度の基準は全タイムラインの色点から決めます。分割中は各タイムラインのパネルの色の段を隠します。<b>輝度検証</b>は、全タイムラインの色点から決めたグレーの四角を画面の中央に出します（出ている間は、各タイムラインの輝度検証の四角より優先）</li>' +
     '<li><b>サークルの下のパネル</b> — 秒数・一時停止・回転の逆転、xy色度図・輝度検証、色の設定がまとまっています</li>' +
     '<li><b>⋯</b>（画面や枠が小さいとき）— xy色度図・輝度検証・色の設定を開閉。ごく小さい枠では、リングの下の <b>⏸</b> で一時停止、<b>⋯</b> で秒数・逆転も含めた設定を枠全体に開きます</li>' +

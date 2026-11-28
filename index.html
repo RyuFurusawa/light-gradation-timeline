@@ -433,7 +433,16 @@ function ptCol(r, g, b, a) {
 // HDR の描画では、リングの色の帯と色点の色を WebGPU で背景と同じ明るさの基準（線形×HDR輝度）で描く。
 // 2D のキャンバスは SDR の白を超えられないため。針・白い縁・文字は 2D のまま、その上に重ねる
 const RING_N = 360, RING_MAXP = 48;
-let ringGpu = null;   // { cx, cy, R, band（画素）, lut: Float32Array(RING_N*4), pts: [[x, y, 半径, 不透明度, r, g, b]] }
+let ringGpu = null;
+// 全体の輝度検証（親の「全体の色」から）：全部の枠の色点から決めたグレーの四角を、画面全体の中央に出す。
+// 四角の位置・大きさはこの枠の座標（px）。枠をまたぐ四角は、それぞれの枠が自分の中の部分を描く
+let gcheck = { on: false, gray: 0, x: 0, y: 0, s: 0 };
+function gcheckOn() { return gcheck.on && paneMulti; }
+function drawGlobalCheck() {
+  if (!gcheckOn() || (renderer && renderer.kind === 'HDR')) { return; }   // HDR はシェーダが描く
+  ctx.fillStyle = rgba(gcheck.gray, gcheck.gray, gcheck.gray);
+  ctx.fillRect(gcheck.x - gcheck.s / 2, gcheck.y - gcheck.s / 2, gcheck.s, gcheck.s);
+}   // { cx, cy, R, band（画素）, lut: Float32Array(RING_N*4), pts: [[x, y, 半径, 不透明度, r, g, b]] }
 function gpuRing() { return !!(renderer && renderer.kind === 'HDR' && renderer.ring); }
 function hdrEnc(r, g, b) {
   return [encExt(s2l(constrain(r, 0, 255) / 255) * hdrGain), encExt(s2l(constrain(g, 0, 255) / 255) * hdrGain), encExt(s2l(constrain(b, 0, 255) / 255) * hdrGain)];
@@ -729,9 +738,12 @@ function draw() {
 
   // 境界グラデーション中は、自分のタイムラインの設定が変わったときだけ、親経由で隣へ知らせる。
   // 隣はそれを使って、同じコマの時刻で自分の色を計算する（evalSpec）。隣の色もここで今のコマの時刻で計算する
-  if (blendOn) {
+  // 分割中は、境界グラデーションがなくても設定を送る（親が全体の輝度検証のグレーを計算するのに使う）
+  if (blendOn || paneMulti) {
     let sp = JSON.stringify(mySpec());
     if (sp !== lastSpecSent) { lastSpecSent = sp; toHost({ type: 'spec', spec: JSON.parse(sp) }); }
+  }
+  if (blendOn) {
     EDGE_SIDES.forEach(function (k) { nb[k].forEach(function (sg) { sg.c = evalSpec(sg.spec); }); });
     EDGE_CORNERS.forEach(function (c) { diag[c] = evalSpec(diagSpec[c]); });
   }
@@ -741,14 +753,15 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ringGpu = null;
+  drawGlobalCheck();
   if (playMode) {
-    if (showLumaCheck) { drawLumaCheck(); }
+    if (showLumaCheck && !gcheckOn()) { drawLumaCheck(); }
   } else {
     setHalo(cur);
     drawRing(sorted);
     drawPlayhead(a);
     drawPoints();
-    if (showLumaCheck) { drawLumaCheck(); }
+    if (showLumaCheck && !gcheckOn()) { drawLumaCheck(); }
     if (showXY) { drawXYDiagram(sorted, cur); }
   }
 
@@ -1441,7 +1454,14 @@ function makeWebGPURenderer(device, ctx, format) {
 
       let gR = 0, gG = 0, gB = 0, showGray = 0.0, rcx = 0, rcy = 0, rhw = 0, rhh = 0;
       const gpu = document.getElementById('gpu');
-      if (showLumaCheck) {
+      if (gcheckOn()) {
+        // 全体の輝度検証が出ている間は、そちらを優先（四角は1つだけ描ける）
+        showGray = 1.0;
+        let gv = encExt(s2l(constrain(gcheck.gray, 0, 255) / 255) * hdrGain);
+        gR = gv; gG = gv; gB = gv;
+        let dpr = window.devicePixelRatio || 1;
+        rcx = gcheck.x * dpr; rcy = gcheck.y * dpr; rhw = rhh = gcheck.s / 2 * dpr;
+      } else if (showLumaCheck) {
         showGray = 1.0;
         let gg = grayForMode();  // [0..255] のSDRグレー（R=G=B）
         // グレーは正規化せず、背景と同じ線形スケール(hdrGain倍)で素直に持ち上げる
@@ -1674,7 +1694,7 @@ function mousePressed(e) {
       let X = xyPixX(xy[0], ly[0], ly[2]), Y = xyPixY(xy[1], ly[1], ly[3]);
       if (dist(mouseX, mouseY, X, Y) < Math.max(15, hitR * 0.6)) {
         dragXYIdx = i;
-        dragXY_Y = rgb2xyz(points[i].r, points[i].g, points[i].b)[1] / 100;
+        dragXY_Y = xyzOfPoint(points[i].r, points[i].g, points[i].b)[1] / 100;
         return;
       }
     }
@@ -2006,6 +2026,9 @@ function initPaneMessaging() {
       if (gainSlider) { gainSlider.value = String(hdrGain); }
     }
     else if (d.type === 'lumaCommit') { commitLuma(); }
+    else if (d.type === 'gcheck') {
+      gcheck = { on: !!d.on, gray: +d.gray || 0, x: +d.x || 0, y: +d.y || 0, s: +d.s || 0 };
+    }
     else if (d.type === 'luma') {
       // 親の「全体の色」：常に元の色から適用し直す。target は全枠の色点から親が決めた明度
       if (lumaSnapshot) { restoreLuma(); }
@@ -2103,7 +2126,7 @@ function buildHost() {
   hostBar = document.createElement('div');
   hostBar.id = 'hostBar';
   document.body.appendChild(hostBar);
-  buildModeUI(hostBar, function (m) { mode = m; updateModeBtns(); hostBroadcast({ type: 'setMode', mode: m }); });
+  buildModeUI(hostBar, function (m) { mode = m; updateModeBtns(); hostBroadcast({ type: 'setMode', mode: m }); if (hostGCheck) { hostSendGCheck(); } });
 
   fsBtn = document.createElement('button');
   fsBtn.id = 'fsBtn';
@@ -2181,6 +2204,14 @@ function buildGlobalUI() {
   hostCommitBtn = el('button', { text: 'この色で確定', parent: lr, style: { display: 'none' },
     title: '明度をそろえた今の色を、全部のタイムラインの色点の色として上書きする（戻るで元に戻せなくなる）',
     on: { click: function (ev) { ev.currentTarget.blur(); hostLumaMode = 'none'; hostSetLumaActive(); hostBroadcast({ type: 'lumaCommit' }); } } });
+  // 全体の輝度検証：全部の枠の色点から、選択中の方式の明度の平均でグレーを決め、画面の中央に四角を出す
+  let cr = el('div', { cls: 'bar', parent: globalPop });
+  hostGCheckBtn = el('button', { text: '輝度検証', parent: cr, title: '全部のタイムラインの色点から決めたグレーの四角を、画面の中央に出す',
+    on: { click: function (ev) {
+      ev.currentTarget.blur();
+      hostGCheck = !hostGCheck; hostGCheckBtn.classList.toggle('active', hostGCheck);
+      hostSendGCheck();
+    } } });
   // 明度統一の方針の説明（i で開閉）
   let help = el('div', { cls: 'lumaHelp', parent: globalPop, html:
     '<p><b>最低</b>：全部のタイムラインの色点のうち、いちばん暗い色の明度（OKLab の L）に、すべての色をそろえます。</p>' +
@@ -2208,6 +2239,22 @@ function buildGlobalUI() {
     globalPop.classList.remove('open'); globalBtn.classList.remove('active');
   });
   window.addEventListener('resize', placeGlobalPop);
+}
+// 全体の輝度検証の四角：画面全体の中央、短辺の 28%。グレーは全部の枠の色点（設定 spec の色）から
+function hostGCheckMsg(q) {
+  let on = hostGCheck && hostPanes.length > 1, gray = 0;
+  if (on) {
+    let pts = [];
+    hostPanes.forEach(function (p) {
+      if (p.spec && Array.isArray(p.spec.pts)) { p.spec.pts.forEach(function (a) { pts.push({ r: +a[1], g: +a[2], b: +a[3] }); }); }
+    });
+    gray = pts.length ? grayForMode(pts)[0] : 0;
+  }
+  let W = window.innerWidth, H = window.innerHeight;
+  return { type: 'gcheck', on: on, gray: gray, x: W / 2 - q.rect.x, y: H / 2 - q.rect.y, s: Math.round(Math.min(W, H) * 0.28) };
+}
+function hostSendGCheck() {
+  hostPanes.forEach(function (q) { try { q.frame.contentWindow.postMessage(hostGCheckMsg(q), '*'); } catch (err) {} });
 }
 function placeGlobalPop() {
   if (!globalPop) { return; }
@@ -2526,7 +2573,7 @@ function hostUpdateKinds() {
   setDispKind(low, low !== best ? '。一部の枠で ' + best + ' を使えなかったため、境界がそろうよう全部の枠を ' + low + ' にそろえています' : '');
 }
 let hostAllowedKind = 'HDR';
-let hostGain = 1.6, hostGainSlider = null, hostGainRow = null, hostLumaMode = 'none', hostLumaBtns = {}, hostRestoreBtn = null, hostCommitBtn = null, globalPop = null, globalBtn = null;
+let hostGain = 1.6, hostGainSlider = null, hostGainRow = null, hostLumaMode = 'none', hostLumaBtns = {}, hostRestoreBtn = null, hostCommitBtn = null, hostGCheck = false, hostGCheckBtn = null, globalPop = null, globalBtn = null;
 
 function hostSyncPanes() {
   hostRebuildDividers();
@@ -2544,6 +2591,7 @@ function hostSendConfig(q) {
     w.postMessage({ type: 'shared', on: true, mode: mode, top: q.top }, '*');
     w.postMessage({ type: 'allowKind', kind: hostAllowedKind }, '*');
     if (multi) { w.postMessage({ type: 'gain', value: hostGain }, '*'); }
+    w.postMessage(hostGCheckMsg(q), '*');
     hostSendActive(q);
     w.postMessage({ type: 'blend', on: multi && blendOn, width: blendWidth,
       segs: {
@@ -2582,6 +2630,7 @@ function onHostMessage(ev) {
     let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
     if (me) {
       me.spec = d.spec;   // 後から読み込まれる枠へ渡せるよう、最新の設定を覚えておく
+      if (hostGCheck) { hostSendGCheck(); }
       [['L', 'R'], ['R', 'L'], ['T', 'B'], ['B', 'T']].forEach(function (pr) {
         me.nb[pr[0]].forEach(function (m) {
           let o = m.pane, idx = -1;
@@ -2867,22 +2916,41 @@ function drawLumaCheck() {
     ctx.fillStyle = rgba(g[0], g[1], g[2]);
     ctx.fillRect(cx - s / 2, gy - s / 2, s, s);
   }
-  if (!playMode) {
-    ctx.font = '12px system-ui, -apple-system, "Hiragino Sans", sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = rgba(0, 0, 0, 130); ctx.fillText(grayLabel, cx + 1, gy - s / 2 - 13);
-    ctx.fillStyle = rgba(255, 255, 255, 210); ctx.fillText(grayLabel, cx, gy - s / 2 - 14);
+  // 説明の文字は四角の下に、四角の幅を超えない大きさで（分割中は小さくなりすぎるので出さない）
+  if (!playMode && !paneMulti) {
+    let fam = 'px system-ui, -apple-system, "Hiragino Sans", sans-serif';
+    ctx.font = '12' + fam;
+    // 1行で幅に収めた大きさ。小さくなりすぎるときは「（」の前で2行に分ける
+    let lines = [grayLabel];
+    let fit = function (ls) { return Math.min(12, 12 * s / Math.max(1, Math.max.apply(null, ls.map(function (t) { return ctx.measureText(t).width; })))); };
+    let fz = fit(lines), k = grayLabel.indexOf('（');
+    if (fz < 9 && k > 0) {
+      let two = [grayLabel.slice(0, k), grayLabel.slice(k)];
+      if (fit(two) > fz) { lines = two; fz = fit(two); }
+    }
+    if (fz >= 6) {
+      ctx.font = fz.toFixed(1) + fam;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      let ty = gy + s / 2 + Math.max(4, fz * 0.6);
+      lines.forEach(function (t, i) {
+        let y = ty + i * fz * 1.3;
+        ctx.fillStyle = rgba(0, 0, 0, 130); ctx.fillText(t, cx + 1, y + 1);
+        ctx.fillStyle = rgba(255, 255, 255, 210); ctx.fillText(t, cx, y);
+      });
+    }
   }
 }
 
 let grayLabel = '';
 // 現在の補間方式の「明度」定義に沿った平均から無彩色グレーを返す
-function grayForMode() {
-  let n = points.length;
+function grayForMode(pts) {
+  let P = pts || points;   // 親が全部の枠の色点で計算するときは pts を渡す
+  let n = P.length;
+  if (!n) { return [0, 0, 0]; }
   if (mode === 'hsb') {
     // HSBのB（明度値）平均。無彩色なのでR=G=B=V*255
     let sum = 0;
-    for (let i = 0; i < n; i++) { sum += rgb2hsv(points[i].r, points[i].g, points[i].b)[2]; }
+    for (let i = 0; i < n; i++) { sum += rgb2hsv(P[i].r, P[i].g, P[i].b)[2]; }
     let v = sum / n;
     grayLabel = 'HSB基準グレー（平均B=' + (v * 100).toFixed(1) + '%）';
     let c = v * 255;
@@ -2892,7 +2960,7 @@ function grayForMode() {
     // 線形光の相対輝度の平均 → 線形グレー → sRGB化
     let sum = 0;
     for (let i = 0; i < n; i++) {
-      let Y = 0.2126 * s2l(points[i].r/255) + 0.7152 * s2l(points[i].g/255) + 0.0722 * s2l(points[i].b/255);
+      let Y = 0.2126 * s2l(P[i].r/255) + 0.7152 * s2l(P[i].g/255) + 0.0722 * s2l(P[i].b/255);
       sum += Y;
     }
     let Y = sum / n;
@@ -2903,21 +2971,21 @@ function grayForMode() {
   if (mode === 'rgbValue') {
     // sRGB画素値そのままの平均（R,G,Bの単純平均を明度とみなす）
     let sum = 0;
-    for (let i = 0; i < n; i++) { sum += (points[i].r + points[i].g + points[i].b) / 3; }
+    for (let i = 0; i < n; i++) { sum += (P[i].r + P[i].g + P[i].b) / 3; }
     let c = sum / n;
     grayLabel = '画素値基準グレー（平均=' + Math.round(c) + '/255）';
     return [c, c, c];
   }
   if (mode === 'cielch' || mode === 'cielabLin') {
     let sum = 0;
-    for (let i = 0; i < n; i++) { sum += rgb2lab(points[i].r, points[i].g, points[i].b)[0]; }
+    for (let i = 0; i < n; i++) { sum += rgb2lab(P[i].r, P[i].g, P[i].b)[0]; }
     let L = sum / n;
     grayLabel = 'CIELab基準グレー（平均L*=' + L.toFixed(1) + '）';
     return lab2rgb(L, 0, 0);
   }
   // oklch / step：OKLab-L 平均
   let sum = 0;
-  for (let i = 0; i < n; i++) { sum += rgb2oklch(points[i].r, points[i].g, points[i].b)[0]; }
+  for (let i = 0; i < n; i++) { sum += rgb2oklch(P[i].r, P[i].g, P[i].b)[0]; }
   let L = sum / n;
   grayLabel = 'OKLab基準グレー（平均L=' + L.toFixed(3) + '）';
   return oklch2rgb(L, 0, 0);
@@ -2934,8 +3002,28 @@ const XY_LOCUS = [
   [0.7334,0.2666],[0.7344,0.2656],[0.7347,0.2653]
 ];
 
+// 背景が P3 の描画のときは、色点の値を P3 の座標として扱う（背景・リングと同じ）。それ以外は sRGB
+function xyIsP3() { return !!(renderer && renderer.kind === 'P3広色域'); }
+function xyzOfPoint(r, g, b) {
+  if (!xyIsP3()) { return rgb2xyz(r, g, b); }
+  let R = s2l(r / 255), G = s2l(g / 255), B = s2l(b / 255);
+  return [(0.4865709 * R + 0.2656677 * G + 0.1982173 * B) * 100,
+          (0.2289746 * R + 0.6917385 * G + 0.0792869 * B) * 100,
+          (0.0451134 * G + 1.0439444 * B) * 100];
+}
+// XYZ（Y=1 基準）→ 線形の RGB（sRGB か P3）
+function xyzToLin(X, Y, Z, p3) {
+  if (p3) {
+    return [2.4934969 * X - 0.9313836 * Y - 0.4027108 * Z,
+            -0.8294890 * X + 1.7626641 * Y + 0.0236247 * Z,
+            0.0358458 * X - 0.0761724 * Y + 0.9568845 * Z];
+  }
+  return [3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z,
+          -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z,
+          0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z];
+}
 function xyFromRgb(r, g, b) {
-  let xyz = rgb2xyz(r, g, b);
+  let xyz = xyzOfPoint(r, g, b);
   let s = xyz[0] + xyz[1] + xyz[2];
   if (s < 1e-6) { return [0.3127, 0.3290]; }  // 黒は色度が定義できないのでD65へ
   return [xyz[0] / s, xyz[1] / s];
@@ -2957,18 +3045,21 @@ function xyPixY(y, dy, dh) { return dy + dh - y / 0.9 * dh; }
 // 馬蹄形の色（線形→sRGB）を塗った下地を、別のキャンバスに1回だけ描いておく（大きさが変わったら描き直す）
 function buildXYBuffer(dw, dh) {
   let g = document.createElement('canvas');
+  let p3 = xyIsP3();
   g.width = dw; g.height = dh;
-  let gc = g.getContext('2d');
-  let img = gc.createImageData(dw, dh), px4 = img.data;   // 背景は透明のまま（馬蹄形の外は描かない）
+  let gc = null;
+  try { gc = g.getContext('2d', p3 ? { colorSpace: 'display-p3' } : undefined); } catch (e) { gc = null; }
+  if (!gc) { gc = g.getContext('2d'); p3 = false; }
+  let img;
+  try { img = p3 ? gc.createImageData(dw, dh, { colorSpace: 'display-p3' }) : gc.createImageData(dw, dh); } catch (e) { img = gc.createImageData(dw, dh); }
+  let px4 = img.data;   // 背景は透明のまま（馬蹄形の外は描かない）
   for (let py = 0; py < dh; py++) {
     for (let px = 0; px < dw; px++) {
       let x = px / dw * 0.8, y = (dh - py) / dh * 0.9;
       if (y <= 0.002) { continue; }
       if (!insideLocus(x, y)) { continue; }
       let X = x / y, Z = (1 - x - y) / y;
-      let R =  3.2404542 * X - 1.5371385 - 0.4985314 * Z;
-      let G = -0.9692660 * X + 1.8760108 + 0.0415560 * Z;
-      let B =  0.0556434 * X - 0.2040259 + 1.0572252 * Z;
+      let lin = xyzToLin(X, 1, Z, p3), R = lin[0], G = lin[1], B = lin[2];
       let mx = Math.max(R, G, B);
       if (mx <= 0) { continue; }
       R = Math.max(R / mx, 0); G = Math.max(G / mx, 0); B = Math.max(B / mx, 0);
@@ -2982,8 +3073,8 @@ function buildXYBuffer(dw, dh) {
   let keep = ctx; ctx = gc;   // 線の道具（polyline・seg）をこの下地に使う
   polyline(loc, 'rgba(0,0,0,0.51)', 2.5);
   polyline(loc, 'rgba(255,255,255,0.59)', 1);
-  // sRGB三角形とD65白色点
-  let tr = [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]];
+  // 色域の三角形（sRGB か P3）とD65白色点
+  let tr = p3 ? [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]] : [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06]];
   polyline(tr.map(function (q) { return [xyPixX(q[0], 0, dw), xyPixY(q[1], 0, dh)]; }), 'rgba(255,255,255,0.67)', 1.2);
   let wx = xyPixX(0.3127, 0, dw), wy = xyPixY(0.3290, 0, dh);
   seg(wx - 4, wy, wx + 4, wy, '#fff', 1.2); seg(wx, wy - 4, wx, wy + 4, '#fff', 1.2);
@@ -3013,11 +3104,7 @@ function xyLayout() {
 function xyYtoRgbLin(x, y, Y) {
   if (y < 1e-4) { y = 1e-4; }
   let X = x / y * Y, Z = (1 - x - y) / y * Y;
-  return [
-    3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z,
-    -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z,
-    0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z
-  ];
+  return xyzToLin(X, Y, Z, xyIsP3());
 }
 function inGamutLin(c) {
   let e = 0.0005;
@@ -3042,7 +3129,7 @@ function xyYfit(x, y, Y) {
 function drawXYDiagram(sorted, cur) {
   let ly0 = xyLayout();
   let dx = ly0[0], dy = ly0[1], dw = ly0[2], dh = ly0[3];
-  let key = dw + 'x' + dh;
+  let key = dw + 'x' + dh + (xyIsP3() ? 'p3' : '');
   if (!xyBuf || xyBufKey !== key) { xyBuf = buildXYBuffer(dw, dh); xyBufKey = key; }
   ctx.drawImage(xyBuf, dx, dy);
   // ループ一周分の軌跡（補間方式の幾何学がここに出る）
@@ -3060,7 +3147,19 @@ function drawXYDiagram(sorted, cur) {
     let X = xyPixX(xy[0], dx, dw), Y = xyPixY(xy[1], dy, dh);
     let interactive = showXY && !showLumaCheck;
     let msz = (interactive && (i === dragXYIdx || dist(mouseX, mouseY, X, Y) < Math.max(15, hitR * 0.6))) ? 16 : 11;
-    ringLine(X, Y, msz, rgba(0, 0, 0, 160), 4); disc(X, Y, msz, rgba(p.r, p.g, p.b));
+    ringLine(X, Y, msz, rgba(0, 0, 0, 160), 4);
+    if (ringGpu) {
+      // HDR：色は WebGPU で（リングの色点と同じ）。2D はその場所を透かす
+      ctx.globalCompositeOperation = 'destination-out';
+      disc(X, Y, msz, '#000');
+      ctx.globalCompositeOperation = 'source-over';
+      if (ringGpu.pts.length < RING_MAXP) {
+        let e = hdrEnc(p.r, p.g, p.b);
+        ringGpu.pts.push([X * dpr, Y * dpr, msz / 2 * dpr, 1, e[0], e[1], e[2]]);
+      }
+    } else {
+      disc(X, Y, msz, ptCol(p.r, p.g, p.b));
+    }
     ringLine(X, Y, msz, '#fff', 1.5);
   }
   // 現在再生中の色（動く白リング）
@@ -3260,7 +3359,7 @@ function buildInfoUI(parentEl) {
     '<li><b>フルスクリーン</b> — UIを消して色だけを全画面表示（クリックか Esc で戻る）</li>' +
     '<li><b>枠の四辺にある ＋</b> — その枠を二分して、押した側に複製を置く（左右にも上下にも、何度でも分けられます。ほかの枠の大きさは変わりません）。<b>左上の ×</b> でその枠を閉じる。<b>境界の白いつまみ</b>をドラッグすると比率を変えられます（ダブルクリックで半々に戻す）。分割中は、ポインタを置いた（タッチでは触れた）枠の ＋ と × だけが出ます</li>' +
     '<li><b>上端のバー</b> — 補間方式・フルスクリーン・このヘルプは全タイムライン共通です。<b>境界グラデーション</b>で、隣り合うタイムラインの境界を、選択中の補間方式でつなぎます（ステップ切替ではつなぎません）。1つの辺に複数のタイムラインが接するところは、区間ごとに相手を替えてつなぎます。中間混色の方式では、3つ・4つのタイムラインが集まる点も色をなめらかに混ぜます（色相回転の方式では、その点だけ色が切り替わります）。横のスライダーは幅（右端＝枠の中央まで）</li>' +
-    '<li><b>全体の色</b>（分割中だけ）— HDR輝度と知覚明度統一（最低・平均・彩度最大・戻る・この色で確定）を、全部のタイムラインへまとめて適用します。明度の基準は全タイムラインの色点から決めます。分割中は各タイムラインのパネルの色の段を隠します</li>' +
+    '<li><b>全体の色</b>（分割中だけ）— HDR輝度と知覚明度統一（最低・平均・彩度最大・戻る・この色で確定）を、全部のタイムラインへまとめて適用します。明度の基準は全タイムラインの色点から決めます。分割中は各タイムラインのパネルの色の段を隠します。<b>輝度検証</b>は、全タイムラインの色点から決めたグレーの四角を画面の中央に出します（出ている間は、各タイムラインの輝度検証の四角より優先）</li>' +
     '<li><b>サークルの下のパネル</b> — 秒数・一時停止・回転の逆転、xy色度図・輝度検証、色の設定がまとまっています</li>' +
     '<li><b>⋯</b>（画面や枠が小さいとき）— xy色度図・輝度検証・色の設定を開閉。ごく小さい枠では、リングの下の <b>⏸</b> で一時停止、<b>⋯</b> で秒数・逆転も含めた設定を枠全体に開きます</li>' +
     '</ul>' +

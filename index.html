@@ -84,10 +84,16 @@
   #colorPop.sheetMode {
     display: block; left: 0 !important; right: 0; top: auto !important; bottom: 0;
     padding: 8px 16px calc(14px + env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0;
-    border-bottom: 0; transform: translateY(105%); transition: transform 0.24s cubic-bezier(.2,.8,.2,1);
-    pointer-events: none;
+    border-bottom: 0; transform: translateY(105%); pointer-events: none;
+    /* 閉じている間は影ごと見えなくする。下端の外に隠しただけだと、影（ぼかし 34px）が枠の下端に数 px はみ出して映り込み、
+       分割中に下の枠との境目が暗い段差になっていた（色選びを一度開いた枠だけ） */
+    visibility: hidden; box-shadow: none;
+    transition: transform 0.24s cubic-bezier(.2,.8,.2,1), visibility 0s linear 0.24s, box-shadow 0s linear 0.24s;
   }
-  #colorPop.sheetMode.open { transform: translateY(0); pointer-events: auto; }
+  #colorPop.sheetMode.open {
+    transform: translateY(0); pointer-events: auto; visibility: visible; box-shadow: 0 10px 34px rgba(0,0,0,0.35);
+    transition: transform 0.24s cubic-bezier(.2,.8,.2,1), visibility 0s, box-shadow 0s;
+  }
   body.host #colorPop { z-index: 45; }   /* 分割中のタッチでは、親が画面全体の下からシートを出す */
   #colorPop .grab { display: none; width: 40px; height: 5px; border-radius: 3px; margin: 0 auto 10px;
     background: rgba(255,255,255,0.28); }

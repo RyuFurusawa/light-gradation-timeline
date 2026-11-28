@@ -64,7 +64,7 @@ CLAUDE.md           このファイル
 - **フルスクリーン**：UIを消して色のみを表示。クリック／Escで復帰
 - **情報パネル**：右上の丸iボタン。操作説明と色変換の注意事項
 
-- **スリープ防止**：Screen Wake Lock。読み込み時に要求し、拒否されたら最初の操作（pointerdown／keydown）で取り直す。タブ復帰（`visibilitychange`）でも取り直す。状態は `wakeState`（pending／on／unsupported／failed）で、情報パネルの `#wakeStatus` に出る。非対応、または操作起点の要求が拒否されたときだけ、暗転オーバーレイ `#wakeNotice` を一度出す
+- **スリープ防止**：Screen Wake Lock。読み込み時に要求し、拒否されたら最初の操作（pointerdown／keydown）で取り直す。タブ復帰（`visibilitychange`）でも取り直す。状態は `wakeState`（pending／on／unsupported／failed）で、情報パネルの `#wakeStatus` に出る。非対応、または操作起点の要求が拒否されているときは、フルスクリーンにするたびに、画面の下端に小さな通知 `#wakeNotice`（！＋文言＋×）を出し、5秒で消す（× でも閉じる）。以前は画面全体を暗転させるオーバーレイを最初の操作で出していたが、強すぎて怖いと言われた
 - **PWA**：`manifest.webmanifest` ＋ `sw.js`。自サイトのファイルはネットワーク優先（更新を即反映）、届かないときだけキャッシュ。HTTP キャッシュも `no-cache` で毎回確かめる（親ページと枠の iframe で版が食い違うと、やり取りの形が合わず壊れるため。実際に古い iframe が残った）。`sw.js` のキャッシュ対象を変えたら `CACHE` の版名を上げる
 
 - **画面分割**：`index.html` は2つの役割で動く。通常の起動は**親（`IS_HOST`）**で、タイムラインは持たず、`#panes` に iframe（`index.html?pane=1`＝**子、`IS_PANE`**）を並べる。起動時に子を1つ作る

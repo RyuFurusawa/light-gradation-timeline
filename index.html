@@ -195,26 +195,27 @@
     background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
   }
   #infoPanel .wakeStatus.warn { background: rgba(255,170,60,0.16); border-color: rgba(255,190,100,0.5); }
-  /* スリープを防げない環境への案内（一度だけ出る。どこかをタップで閉じる）
-     他のUIと重ならないよう、方式モーダルと同じ暗転オーバーレイにする */
+  /* スリープを防げない環境への案内：フルスクリーンにしたとき、画面の下端に小さく出す。5秒で消える（× でも閉じる） */
   #wakeNotice {
-    position: fixed; inset: 0; z-index: 35; display: none;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    align-items: center; justify-content: center; cursor: pointer;
-    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 8px); z-index: 40;
+    display: flex; align-items: center; gap: 10px; box-sizing: border-box; max-width: calc(100vw - 24px);
+    padding: 8px 8px 8px 12px; border-radius: 14px;
+    background: rgba(24,24,28,0.82); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; font-size: 12.5px; line-height: 1.5; color: #e8e8e8;
+    opacity: 0; pointer-events: none; transition: opacity 0.3s, transform 0.3s;
   }
-  #wakeNotice.open { display: flex; }
-  #wakeNotice .card {
-    max-width: min(440px, 84vw); box-sizing: border-box;
-    padding: 20px 22px; border-radius: 18px;
-    background: rgba(40,28,10,0.85);
-    border: 1px solid rgba(255,190,100,0.55); color: #ffe9c8;
-    font-size: 14px; line-height: 1.8;
-    box-shadow: 0 16px 60px rgba(0,0,0,0.5);
+  #wakeNotice.open { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+  #wakeNotice .bang {
+    flex: none; width: 20px; height: 20px; border-radius: 50%; background: #f0b44c; color: #1a1306;
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px;
   }
-  #wakeNotice .card b { color: #fff; }
-  #wakeNotice .card .closeHint { display: block; margin-top: 10px; font-size: 12px; color: rgba(255,233,200,0.6); text-align: center; }
+  #wakeNotice .txt { flex: 1 1 auto; }
+  #wakeNotice .x {
+    flex: none; width: 28px; height: 28px; border-radius: 50%; border: 0; padding: 0; cursor: pointer;
+    background: rgba(255,255,255,0.1); color: #f2f2f2; font-size: 15px; line-height: 1;
+  }
+  #wakeNotice .x:hover { background: rgba(255,255,255,0.2); }
   /* ---- 画面分割（親ページ）：タイムラインを iframe で並べる。
      枠は分割の木（hostRoot）から計算した矩形に絶対配置する（iframe は DOM 上で移動すると再読み込みされるため、入れ子にしない） ---- */
   #panes { position: fixed; inset: 0; background: #000; overflow: hidden; }
@@ -566,7 +567,7 @@ const MODE_LIST = [
 let fsBtn = null;
 let wakeLock = null;          // WakeLockSentinel（保持中のみ非null）
 let wakeState = 'pending';    // pending | on | unsupported | failed
-let wakeRequesting = false, wakeNotice = null, wakeNoticeShown = false;
+let wakeRequesting = false, wakeNotice = null;
 let timeBar, colorBar, viewBar, pauseBtn, durNum, durSlider, gainWrap, restoreBtn = null, checkBtn, xyBtn;
 let lumaSegBtns = {}, lumaMode = 'none';
 let modeLabels = {};
@@ -2673,7 +2674,7 @@ function onHostMessage(ev) {
 function hostSetPlay(on, fsDone) {
   playMode = on;
   document.body.classList.toggle('playing', on);
-  if (on && wakeNotice) { wakeNotice.classList.remove('open'); }
+  if (on) { maybeShowWakeNotice(); } else { hideWakeNotice(); }
   hostBroadcast({ type: 'setPlay', on: on });
   try {
     if (on && !fsDone && !hostFsElement()) {
@@ -2728,10 +2729,13 @@ function initWakeLock() {
   }
   wakeNotice = document.createElement('div');
   wakeNotice.id = 'wakeNotice';
-  wakeNotice.innerHTML = '<div class="card"><b>この環境では、画面のスリープを自動で防げません。</b><br>' +
-    '制作の前に、端末の自動ロック（画面オフ）を「なし」にしてください。手順は右上の i にあります。' +
-    '<span class="closeHint">画面のどこかをタップすると閉じます</span></div>';
-  wakeNotice.addEventListener('click', function () { wakeNotice.classList.remove('open'); });
+  wakeNotice.setAttribute('role', 'status');
+  wakeNotice.innerHTML = '<span class="bang" aria-hidden="true">!</span>' +
+    '<span class="txt">この環境では、画面のスリープを自動で防げません。端末の自動ロック（画面オフ）を「なし」にしてください（手順は i）</span>' +
+    '<button class="x" type="button" aria-label="閉じる" title="閉じる">×</button>';
+  // 通知の上の操作は、フルスクリーンの解除（画面のタップ）にしない
+  wakeNotice.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+  wakeNotice.querySelector('.x').addEventListener('click', function (ev) { ev.stopPropagation(); hideWakeNotice(); });
   document.body.appendChild(wakeNotice);
 
   document.addEventListener('visibilitychange', function () {
@@ -2751,7 +2755,7 @@ function requestWakeLock(fromGesture) {
     wakeRequesting = false;
     wakeLock = sentinel;
     setWakeState('on');
-    if (wakeNotice) { wakeNotice.classList.remove('open'); }
+    hideWakeNotice();
     sentinel.addEventListener('release', function () {
       wakeLock = null;
       // 表示中なのに解放された（省電力モードなど）。次の操作で取り直す
@@ -2779,10 +2783,19 @@ function setWakeState(s) {
     '現在の状態：確認中（画面を一度タップすると有効になります）';
 }
 
-function showWakeNotice() {
-  if (wakeNoticeShown || playMode || !wakeNotice) { return; }
-  wakeNoticeShown = true;
+// 防げないと分かった時点では出さず、フルスクリーンにしたときに下端へ小さく出す（5秒で消える）
+let wakeNoticeTimer = null;
+// 防げないと分かったのがフルスクリーンの最中（フルスクリーンにした操作で確かめた場合など）なら、そのとき出す
+function showWakeNotice() { if (playMode) { maybeShowWakeNotice(); } }
+function maybeShowWakeNotice() {
+  if (!wakeNotice || wakeState === 'on' || wakeState === 'pending') { return; }
   wakeNotice.classList.add('open');
+  clearTimeout(wakeNoticeTimer);
+  wakeNoticeTimer = setTimeout(hideWakeNotice, 5000);
+}
+function hideWakeNotice() {
+  clearTimeout(wakeNoticeTimer); wakeNoticeTimer = null;
+  if (wakeNotice) { wakeNotice.classList.remove('open'); }
 }
 
 /* ---------------- PWA（オフライン起動用のサービスワーカー） ---------------- */

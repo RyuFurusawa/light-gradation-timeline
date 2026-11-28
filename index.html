@@ -440,6 +440,24 @@ let ringGpu = null;
 // 四角の位置・大きさはこの枠の座標（px）。枠をまたぐ四角は、それぞれの枠が自分の中の部分を描く
 let gcheck = { on: false, gray: 0, x: 0, y: 0, s: 0 };
 function gcheckOn() { return gcheck.on && paneMulti; }
+// 診断の文字（?diag=1）：枠ごとの描画の違いを実機で確かめるため
+function drawDiag(cur) {
+  let g = document.getElementById('gpu');
+  let mm = function (q) { return !!(window.matchMedia && window.matchMedia(q).matches); };
+  let lines = [
+    '方式 ' + (renderer ? renderer.kind : '-') + '（本来 ' + (naturalKind || '-') + '・許可 ' + allowedKind + '）',
+    'HDR輝度 ' + hdrGain.toFixed(2) + '・失敗 ' + rendererFails + (hdrBroken ? '・HDR断念' : ''),
+    'dpr ' + (window.devicePixelRatio || 1) + '・枠 ' + window.innerWidth + '×' + window.innerHeight,
+    'gpu ' + g.width + '×' + g.height + '（' + g.style.display + '）',
+    'HDR画面 ' + mm('(dynamic-range: high)') + '・P3 ' + mm('(color-gamut: p3)'),
+    '色 ' + cur.map(function (v) { return v.toFixed(1); }).join(', ') + (gcheckOn() ? '・グレー ' + gcheck.gray.toFixed(2) : '')
+  ];
+  ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  let w = 0; lines.forEach(function (t) { w = Math.max(w, ctx.measureText(t).width); });
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(6, 6, w + 12, lines.length * 15 + 8);
+  ctx.fillStyle = '#fff';
+  lines.forEach(function (t, i) { ctx.fillText(t, 12, 10 + i * 15); });
+}
 function drawGlobalCheck() {
   if (!gcheckOn() || (renderer && renderer.kind === 'HDR')) { return; }   // HDR はシェーダが描く
   ctx.fillStyle = rgba(gcheck.gray, gcheck.gray, gcheck.gray);
@@ -502,7 +520,8 @@ let cornerOn = { TL: false, TR: false, BL: false, BR: false }, diag = { TL: null
 let topInset = 0;                          // 子：上端に親の共通バーがあるとき、そのぶん下げる量
 let hostRoot = null, hostDividers = [];    // 親：分割の木（葉＝枠、節＝左右または上下の二分割と比率）
 const NO_HDR = /[?&]nohdr\b/.test(location.search);
-const NO_HALO = !/[?&]halo=1\b/.test(location.search);   // リングの光の縁（影）は既定でなし。?halo=1 で付ける
+const NO_HALO = !/[?&]halo=1\b/.test(location.search);
+const DIAG = /[?&]diag=1\b/.test(location.search);   // 診断：各枠の描画の方式・HDR輝度・画素数などを枠の中に出す（?diag=1）   // リングの光の縁（影）は既定でなし。?halo=1 で付ける
    // 検証用：HDRを使わず P3／sRGB の経路で描く
 let hostBar = null, blendBtn = null;
 
@@ -767,6 +786,7 @@ function draw() {
     if (showXY) { drawXYDiagram(sorted, cur); }
   }
 
+  if (DIAG) { drawDiag(cur); }
   // 現在色を選ばれたレンダラで画面全体に描く
   // エラーのときは、このコマは描かずに（前のコマの色のまま）準備し直す。すぐに別の方式へは落とさない
   try {
@@ -2382,7 +2402,7 @@ function makePane(state) {
   let f = document.createElement('iframe');
   f.setAttribute('allow', 'fullscreen');
   f.title = 'タイムライン';
-  f.src = location.pathname.split('/').pop() + '?pane=1' + (NO_HDR ? '&nohdr=1' : '') + (NO_HALO ? '' : '&halo=1') +
+  f.src = location.pathname.split('/').pop() + '?pane=1' + (NO_HDR ? '&nohdr=1' : '') + (NO_HALO ? '' : '&halo=1') + (DIAG ? '&diag=1' : '') +
     (state ? '#s=' + encodeURIComponent(JSON.stringify(state)) : '');
   let pane = { div: div, frame: f, node: null, rect: { x: 0, y: 0, w: 0, h: 0 }, nb: {}, top: 0 };
   div.appendChild(f);

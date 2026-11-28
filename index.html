@@ -422,6 +422,22 @@ function sizeRingCanvas() {
 function rgba(r, g, b, a) {
   return 'rgba(' + Math.round(constrain(r, 0, 255)) + ',' + Math.round(constrain(g, 0, 255)) + ',' + Math.round(constrain(b, 0, 255)) + ',' + (a === undefined ? 1 : constrain(a / 255, 0, 1)) + ')';
 }
+// 色点・リングの色（背景と同じ基準）。P3 の描画では値を P3 の座標として、それ以外は sRGB として
+function ptCol(r, g, b, a) {
+  if (renderer && renderer.kind === 'P3広色域') {
+    return 'color(display-p3 ' + (constrain(r, 0, 255) / 255).toFixed(4) + ' ' + (constrain(g, 0, 255) / 255).toFixed(4) + ' ' +
+      (constrain(b, 0, 255) / 255).toFixed(4) + ' / ' + (a === undefined ? 1 : constrain(a / 255, 0, 1)).toFixed(3) + ')';
+  }
+  return rgba(r, g, b, a);
+}
+// HDR の描画では、リングの色の帯と色点の色を WebGPU で背景と同じ明るさの基準（線形×HDR輝度）で描く。
+// 2D のキャンバスは SDR の白を超えられないため。針・白い縁・文字は 2D のまま、その上に重ねる
+const RING_N = 360, RING_MAXP = 48;
+let ringGpu = null;   // { cx, cy, R, band（画素）, lut: Float32Array(RING_N*4), pts: [[x, y, 半径, 不透明度, r, g, b]] }
+function gpuRing() { return !!(renderer && renderer.kind === 'HDR' && renderer.ring); }
+function hdrEnc(r, g, b) {
+  return [encExt(s2l(constrain(r, 0, 255) / 255) * hdrGain), encExt(s2l(constrain(g, 0, 255) / 255) * hdrGain), encExt(s2l(constrain(b, 0, 255) / 255) * hdrGain)];
+}
 function disc(x, y, d, style) { ctx.fillStyle = style; ctx.beginPath(); ctx.arc(x, y, d / 2, 0, TWO_PI); ctx.fill(); }
 function ringLine(x, y, d, style, w) { ctx.strokeStyle = style; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(x, y, d / 2, 0, TWO_PI); ctx.stroke(); }
 function seg(x0, y0, x1, y1, style, w) { ctx.strokeStyle = style; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); }
@@ -555,7 +571,9 @@ function setup() {
     return;
   }
   cnv = el('canvas', { cls: 'ringCanvas' });
-  ctx = cnv.getContext('2d');
+  // P3 の画面では、リングのキャンバスも P3 にする（背景と同じく、色点の値を P3 の座標として描くため）
+  try { ctx = cnv.getContext('2d', p3Capable() ? { colorSpace: 'display-p3' } : undefined); } catch (e) { ctx = null; }
+  if (!ctx) { ctx = cnv.getContext('2d'); }
   mainCanvasElt = cnv;
   sizeRingCanvas();
   layout();
@@ -718,6 +736,22 @@ function draw() {
     EDGE_CORNERS.forEach(function (c) { diag[c] = evalSpec(diagSpec[c]); });
   }
 
+  // リングのキャンバスは透明に消してから描く（背景の色はレンダラが担当）
+  // 先に 2D を描く：HDR のときは、リングの帯と色点の色（ringGpu）をここで集めて、同じコマのレンダラへ渡す
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ringGpu = null;
+  if (playMode) {
+    if (showLumaCheck) { drawLumaCheck(); }
+  } else {
+    setHalo(cur);
+    drawRing(sorted);
+    drawPlayhead(a);
+    drawPoints();
+    if (showLumaCheck) { drawLumaCheck(); }
+    if (showXY) { drawXYDiagram(sorted, cur); }
+  }
+
   // 現在色を選ばれたレンダラで画面全体に描く
   // エラーのときは、このコマは描かずに（前のコマの色のまま）準備し直す。すぐに別の方式へは落とさない
   try {
@@ -726,21 +760,6 @@ function draw() {
   } catch (e) {
     onRenderError(e);
   }
-  // リングのキャンバスは透明に消してから描く（背景の色はレンダラが担当）
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  if (playMode) {
-    if (showLumaCheck) { drawLumaCheck(); }
-    return;
-  }
-
-  setHalo(cur);
-  drawRing(sorted);
-  drawPlayhead(a);
-  drawPoints();
-  if (showLumaCheck) { drawLumaCheck(); }
-  if (showXY) { drawXYDiagram(sorted, cur); }
 }
 
 /* ---------------- 共通ロジック ---------------- */
@@ -1243,6 +1262,7 @@ function makeCssRenderer(wide) {
 }
 
 function makeWebGPURenderer(device, ctx, format) {
+  const RING_BASE = (4 + 4 * (EDGE_MAXS - 1) * 2) * EDGE_CN * EDGE_CN;   // 面の表のあと
   const shader = device.createShaderModule({ code:
     'struct U {\n' +
     '  bg : vec4<f32>,\n' +
@@ -1257,9 +1277,13 @@ function makeWebGPURenderer(device, ctx, format) {
     '  seg : array<vec4<f32>, ' + (4 * EDGE_MAXS) + '>,\n' +   // 区間 xy＝a0, a1（辺に沿った 0..1）。辺ごとに EDGE_MAXS 個
     '  lut : array<vec4<f32>, ' + (4 * EDGE_MAXS * (EDGE_N + 1)) + '>,\n' +   // 区間ごとの、境界→帯の終わりの色の表（線形×ゲイン）
     '  tj : array<vec4<f32>, ' + (4 * (EDGE_MAXS - 1)) + '>,\n' +   // T字の交点 x＝位置, y＝手前の隣の長さ, z＝奥の隣の長さ（0 なら面なし）
+    '  ring : vec4<f32>,\n' +     // リング xy＝中心, z＝半径, w＝帯の半分の太さ（画素）
+    '  rflag : vec4<f32>,\n' +    // x＝リングを描くか, y＝色点の数
     '};\n' +
     '@group(0) @binding(0) var<uniform> u : U;\n' +
-    '@group(0) @binding(1) var<storage, read> cl : array<vec4<f32>>;\n' +   // 4枠が集まる角の面の表（角ごとに EDGE_CN×EDGE_CN）
+    '@group(0) @binding(1) var<storage, read> cl : array<vec4<f32>>;\n' +
+    'const RB = ' + RING_BASE + 'u;\n' +   // cl の中のリングの色の表（RING_N 個、拡張sRGB）の位置
+    'const PB = ' + (RING_BASE + RING_N) + 'u;\n' +   // 色点（2個ずつ：xy＝位置, z＝半径, w＝不透明度／rgb＝色）   // 4枠が集まる角の面の表（角ごとに EDGE_CN×EDGE_CN）
     'fn lutAt(base : u32, k : f32) -> vec3<f32> {\n' +
     '  let p = k * ' + EDGE_N + '.0;\n' +
     '  let i0 = min(u32(floor(p)), ' + (EDGE_N - 1) + 'u);\n' +
@@ -1315,7 +1339,31 @@ function makeWebGPURenderer(device, ctx, format) {
     '  var p = array<vec2<f32>, 3>(vec2<f32>(-1.0,-3.0), vec2<f32>(-1.0,1.0), vec2<f32>(3.0,1.0));\n' +
     '  return vec4<f32>(p[i], 0.0, 1.0);\n' +
     '}\n' +
+    // リングの帯と色点（HDR のとき）。2D のリングと同じ場所・同じ太さで、背景の上に重ねる（縁は 1px でなめらかに）
     '@fragment fn fs(@builtin(position) fc : vec4<f32>) -> @location(0) vec4<f32> {\n' +
+    '  var c = bgAt(fc);\n' +
+    '  if (u.rflag.x > 0.5) {\n' +
+    '    let d = fc.xy - u.ring.xy;\n' +
+    '    let r = length(d);\n' +
+    '    let cov = clamp(u.ring.w - abs(r - u.ring.z) + 0.5, 0.0, 1.0);\n' +
+    '    if (cov > 0.0) {\n' +
+    '      var a = atan2(d.y, d.x); if (a < 0.0) { a = a + 6.28318530718; }\n' +
+    '      let p = a / 6.28318530718 * ' + RING_N + '.0;\n' +
+    '      let i0 = u32(floor(p)) % ' + RING_N + 'u; let i1 = (i0 + 1u) % ' + RING_N + 'u;\n' +
+    '      let rc = mix(cl[RB + i0].rgb, cl[RB + i1].rgb, p - floor(p));\n' +
+    '      c = vec4<f32>(mix(c.rgb, rc, cov), 1.0);\n' +
+    '    }\n' +
+    '    let np = u32(u.rflag.y);\n' +
+    '    for (var i = 0u; i < ' + RING_MAXP + 'u; i = i + 1u) {\n' +
+    '      if (i >= np) { break; }\n' +
+    '      let q0 = cl[PB + i * 2u]; let q1 = cl[PB + i * 2u + 1u];\n' +
+    '      let cv = clamp(q0.z - length(fc.xy - q0.xy) + 0.5, 0.0, 1.0) * q0.w;\n' +
+    '      if (cv > 0.0) { c = vec4<f32>(mix(c.rgb, q1.rgb, cv), 1.0); }\n' +
+    '    }\n' +
+    '  }\n' +
+    '  return c;\n' +
+    '}\n' +
+    'fn bgAt(fc : vec4<f32>) -> vec4<f32> {\n' +
     '  if (u.flags.x > 0.5) {\n' +
     '    let d = abs(fc.xy - u.rect.xy);\n' +
     '    if (d.x <= u.rect.z && d.y <= u.rect.w) { return u.gray; }\n' +
@@ -1360,9 +1408,10 @@ function makeWebGPURenderer(device, ctx, format) {
   const UB_SEG = 36, UB_LUT = UB_SEG + 4 * EDGE_MAXS * 4, UB_TJ = UB_LUT + 4 * EDGE_MAXS * (EDGE_N + 1) * 4;
   // 面の表：4つの角 ＋ T字の交点（辺ごとに EDGE_MAXS−1 個 × 左右の2面）
   const CL_COUNT = 4 + 4 * (EDGE_MAXS - 1) * 2, CL_ONE = EDGE_CN * EDGE_CN * 4;
-  const CL_FLOATS = CL_COUNT * CL_ONE;
+  const CL_FLOATS = CL_COUNT * CL_ONE + (RING_N + RING_MAXP * 2) * 4;
   const cornerBuf = device.createBuffer({ size: CL_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const UB_FLOATS = UB_TJ + 4 * (EDGE_MAXS - 1) * 4;
+  const UB_RING = UB_TJ + 4 * (EDGE_MAXS - 1) * 4;
+  const UB_FLOATS = UB_RING + 8;
   const uniformBuf = device.createBuffer({ size: UB_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const bgl = device.createBindGroupLayout({ entries: [
     { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
@@ -1382,6 +1431,7 @@ function makeWebGPURenderer(device, ctx, format) {
   return {
     kind: 'HDR',
     device: device,
+    ring: true,
     draw: function (rgb) {
       // 背景：線形値をhdrGain倍で持ち上げ（グレーと同一スケール＝輝度比較が正しく成立）
       let lr = s2l(constrain(rgb[0], 0, 255) / 255);
@@ -1439,6 +1489,15 @@ function makeWebGPURenderer(device, ctx, format) {
           });
         });
       }
+      if (ringGpu) {
+        data.set([ringGpu.cx, ringGpu.cy, ringGpu.R, ringGpu.band / 2, 1, ringGpu.pts.length, 0, 0], UB_RING);
+        device.queue.writeBuffer(cornerBuf, RING_BASE * 16, ringGpu.lut);
+        if (ringGpu.pts.length) {
+          let pd = new Float32Array(ringGpu.pts.length * 8);
+          ringGpu.pts.forEach(function (q, i) { pd.set([q[0], q[1], q[2], q[3], q[4], q[5], q[6], 1], i * 8); });
+          device.queue.writeBuffer(cornerBuf, (RING_BASE + RING_N) * 16, pd);
+        }
+      }
       device.queue.writeBuffer(uniformBuf, 0, data);
       const enc = device.createCommandEncoder();
       const view = ctx.getCurrentTexture().createView();
@@ -1476,12 +1535,27 @@ function drawRing(sorted) {
     ringLine(cx, cy, R * 2, '#000', Math.max(1, rd.band - 1.5));
     haloOff();
   }
+  if (gpuRing()) {
+    // 色の帯は WebGPU へ。光の縁を描いたときは、帯の場所だけ 2D を透かす
+    if (!NO_HALO) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ringLine(cx, cy, R * 2, '#000', rd.band);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    let lut = new Float32Array(RING_N * 4);
+    for (let k = 0; k < RING_N; k++) {
+      let c = sampleAt(k / RING_N * TWO_PI + 0.0001, sorted), e = hdrEnc(c[0], c[1], c[2]);
+      lut[k * 4] = e[0]; lut[k * 4 + 1] = e[1]; lut[k * 4 + 2] = e[2]; lut[k * 4 + 3] = 1;
+    }
+    ringGpu = { cx: cx * dpr, cy: cy * dpr, R: R * dpr, band: rd.band * dpr, lut: lut, pts: [] };
+    return;
+  }
   let steps = 360;
   ctx.lineWidth = rd.band; ctx.lineCap = 'round';
   for (let k = 0; k < steps; k++) {
     let a0 = k / steps * TWO_PI, a1 = (k + 1.35) / steps * TWO_PI;
     let c = sampleAt(a0 + 0.0001, sorted);
-    ctx.strokeStyle = rgba(c[0], c[1], c[2]);
+    ctx.strokeStyle = ptCol(c[0], c[1], c[2]);
     ctx.beginPath(); ctx.moveTo(cx + cos(a0) * R, cy + sin(a0) * R); ctx.lineTo(cx + cos(a1) * R, cy + sin(a1) * R); ctx.stroke();
   }
 }
@@ -1534,19 +1608,35 @@ function drawPoints() {   // 見え方（keyA・ringA）は drawPlayhead で更�
       haloOn(rr * 0.9 + 4);
       disc(x, y, (rr + ring) * 2, rgba(255, 90, 90));
       haloOff();
-      disc(x, y, rr * 2, rgba(p.r, p.g, p.b, 110));
+      disc(x, y, rr * 2, ptCol(p.r, p.g, p.b, 110));
       let q = rr * 0.45, w = Math.max(1.5, ring);
       seg(x - q, y - q, x + q, y + q, '#fff', w); seg(x - q, y + q, x + q, y - q, '#fff', w);
       drawOutlinedText('離すと削除', x, y - rr - 16, 13, 255);
     } else {
       // 白い輪（リングに近づいたときだけ）の上に色を置く。つかんでいるときは縁（光の縁）を強く
       let ra = (dragging || hovered) ? 1 : ringA;
+      if (ringGpu) {
+        // 色は WebGPU で描く。2D は色の場所を透かし（針がかからないように）、白い縁だけを輪で描く
+        ctx.globalCompositeOperation = 'destination-out';
+        disc(x, y, rr * 2, rgba(0, 0, 0, 255 * keyA));
+        ctx.globalCompositeOperation = 'source-over';
+        if (ra > 0) {
+          haloOn(rr * 0.9 + 4, dragging ? 1.3 : 1);
+          ringLine(x, y, (rr + ring * ra / 2) * 2, rgba(255, 255, 255, 255 * ra * keyA), ring * ra);
+          haloOff();
+        }
+        if (ringGpu.pts.length < RING_MAXP) {
+          let e = hdrEnc(p.r, p.g, p.b);
+          ringGpu.pts.push([x * dpr, y * dpr, rr * dpr, keyA, e[0], e[1], e[2]]);
+        }
+        continue;
+      }
       if (ra > 0) {
         haloOn(rr * 0.9 + 4, dragging ? 1.3 : 1);
         disc(x, y, (rr + ring * ra) * 2, rgba(255, 255, 255, 255 * ra * keyA));
         haloOff();
       }
-      disc(x, y, rr * 2, rgba(p.r, p.g, p.b, 255 * keyA));
+      disc(x, y, rr * 2, ptCol(p.r, p.g, p.b, 255 * keyA));
     }
   }
 }

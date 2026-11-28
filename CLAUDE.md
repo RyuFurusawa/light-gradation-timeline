@@ -38,6 +38,7 @@ CLAUDE.md           このファイル
 - **HDR**：WebGPU `rgba16float` + `toneMapping: { mode: "extended" }` + `colorSpace: 'srgb'`、拡張sRGBエンコード（`encExt`）。背景もグレーも「線形値 × hdrGain」の同一スケール（最大チャンネル正規化はしない）
 - **描画の方式を全枠でそろえる**：同じ色の値でも、HDR と P3／sRGB では画面への出方が違うので、分割中に枠ごとに方式が食い違うと境界に段差が出る（iPad で「うっすらした線」として見えた。境界の全長で下の枠だけ一律に明るい段差）。各枠は出せる方式 `naturalKind` を `kind` で親へ送り、親（`hostUpdateKinds()`）は低い枠に一度だけ `retryRenderer` で準備し直させ、全枠の最低の方式を `allowKind` で配る。各枠は `useRenderer()` で min(自分の方式, `allowedKind`) で描く。ヘルプの「表示」の行に、そろえたことを書く
 - **描画のエラー**：`renderer.draw` が失敗しても、すぐに別の方式へ落とさない（以前は一度のエラーでその枠だけ永久に P3／sRGB になっていた）。そのコマは描かずに `onRenderError()` で WebGPU を準備し直し、続けて4回失敗したときだけ HDR をあきらめる（`hdrBroken`）。GPU が失われたとき（`device.lost`）も同じ
+- **リングと色点の色は背景と同じ基準で描く**：HDR のときは、リングの色の帯と色点の色を WebGPU のシェーダで背景の上に重ねる（`ringGpu`：2D を描く `draw()` の前半で集め、同じコマの `renderer.draw()` へ渡す。帯は `RING_N`(360) 点の表、色点は最大 `RING_MAXP`(48) 個。どちらも線形×`hdrGain`）。2D のキャンバスは SDR の白を超えられず、iPhone ではリングが背景より暗く見えていたため。針・白い縁・文字は 2D のままで、色点の場所は `destination-out` で透かす。P3 のときは、リングのキャンバスを `display-p3` で作り、色を `ptCol()`（`color(display-p3 …)`）で描く（背景と同じく、値を P3 の座標として扱う）
 - **HDR判定**：`(dynamic-range: high)` メディアクエリでゲートする（WebGPU の configure は SDR ディスプレイでも成功してしまうため）。`change` イベントを監視し `refreshRenderer()` で動的に追従。非HDR時は HDR輝度スライダー（`gainWrap`）を隠す
 - **駆動**：`noLoop()` + `requestAnimationFrame` で、30コマ/秒の刻み（`TICK_MS`）ごとに `redraw()`。描画中の時刻 `frameClock` はその刻みに丸めた絶対時刻（`performance.timeOrigin + rAF の時刻`）で、同じページの枠（iframe）では全部同じ値になる。位相は `clockMs()` 基準（`t0`・`pausedAt` も絶対時刻）。`millis()` は位相に使わない（タップの間隔判定だけ）
 

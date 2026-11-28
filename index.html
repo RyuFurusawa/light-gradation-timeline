@@ -1584,10 +1584,12 @@ function drawPlayhead(a) {
   let L = rd.band / 2 + rd.tick, s = rd.knob / 11;
   let x0 = cx + cos(a) * (R - L), y0 = cy + sin(a) * (R - L);
   let x1 = cx + cos(a) * (R + L), y1 = cy + sin(a) * (R + L);
-  haloOn(5 + 3 * s, 0.9);
-  seg(x0, y0, x1, y1, '#fff', Math.max(1.5, 2.4 * s));
-  // つまみ：マウスはリングに近づいたとき（白い輪と同じ ringA）だけ、タッチは選んでいる枠だけに出す。ほかは線だけ
   updateKeyVisibility();
+  // 針の線：分割中は、選ばれていない枠では出さない（色点と同じく、マウスが入った枠・タッチで選んだ枠だけ）
+  let la = (dragPlayhead || !paneMulti) ? 1 : keyA;
+  haloOn(5 + 3 * s, 0.9 * la);
+  if (la > 0) { seg(x0, y0, x1, y1, rgba(255, 255, 255, 255 * la), Math.max(1.5, 2.4 * s)); }
+  // つまみ：マウスはリングに近づいたとき（白い輪と同じ ringA）だけ、タッチは選んでいる枠だけに出す。ほかは線だけ
   let ka = dragPlayhead ? 1 : (isCoarse ? keyA : ringA);
   if (ka > 0) { disc(x1, y1, rd.knob, rgba(255, 255, 255, 255 * ka)); }
   haloOff();

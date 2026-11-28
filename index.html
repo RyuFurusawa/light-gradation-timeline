@@ -88,6 +88,7 @@
     pointer-events: none;
   }
   #colorPop.sheetMode.open { transform: translateY(0); pointer-events: auto; }
+  body.host #colorPop { z-index: 45; }   /* 分割中のタッチでは、親が画面全体の下からシートを出す */
   #colorPop .grab { display: none; width: 40px; height: 5px; border-radius: 3px; margin: 0 auto 10px;
     background: rgba(255,255,255,0.28); }
   #colorPop.sheetMode .grab { display: block; }
@@ -1685,7 +1686,7 @@ function isCanvasEvent(e) { return !e || !e.target || (mainCanvasElt ? e.target 
 function mousePressed(e) {
   if (IS_HOST || !isCanvasEvent(e)) { return; }
   if (isCoarse && paneMulti && !paneActive && !playMode) { tapSwallow = true; return; }
-  if (colorPop && colorPop.classList.contains('open')) { closePicker(); tapSwallow = true; return; }
+  if ((colorPop && colorPop.classList.contains('open')) || remotePick) { closePicker(); tapSwallow = true; return; }
   if (playMode) { exitPlay(); return; }
   pressX = mouseX; pressY = mouseY; movedFar = false;
   dragIdx = -1; dragDelete = false; dragPlayhead = false;
@@ -1797,7 +1798,7 @@ function bindInput() {
 
 // シートの開閉に合わせて、リングを持ち上げる／戻す（シートのせり出しと同じくらいの速さで、少し弾むように）
 function liftRing() {
-  let open = !!(isCoarse && colorPop && colorPop.classList.contains('open') && liftGoal);
+  let open = !!(isCoarse && ((colorPop && colorPop.classList.contains('open')) || remotePick) && liftGoal);
   let goal = open ? 1 : 0;
   if (sheetT === goal && !open) { return; }
   sheetT += (goal - sheetT) * 0.32;
@@ -1813,8 +1814,8 @@ function liftRing() {
 //  ・シートの上の空きにリング（針のつまみまで）がまるごと入るなら、そこへ移す（もともと入っていればそのまま）
 //  ・入らなければ（分割した低い枠など）、編集しているキーストーンとその周りのグラデーションがシートの上に見える所まで持ち上げる。
 //    リングの上側は枠の外へ出てもよい
-function computeLift(i) {
-  let sheetTop = height - colorPop.offsetHeight;
+function computeLift(i, sheetTop0) {
+  let sheetTop = (sheetTop0 !== undefined) ? sheetTop0 : height - colorPop.offsetHeight;
   let m = ringReach() - R + 4, top = topInset + 26, bottom = sheetTop - 10;
   if (baseCy + baseR + m <= bottom) { return { R: baseR, cy: baseCy }; }
   if (2 * (baseR + m) <= bottom - top) { return { R: baseR, cy: (top + bottom) / 2 }; }
@@ -1830,9 +1831,10 @@ let colorPop = null, popSV = null, popHue = null, popSw = null, popHex = null, p
 let POP_W = 176, POP_H = 120, HUE_H = 16;
 // 面と帯の大きさ。マウスは小さなパネル、タッチは幅いっぱいのシート（高さは画面の 4 割まで）
 function sizePicker() {
-  if (isCoarse) {
-    POP_W = Math.round(Math.min(width - 32, 520));
-    POP_H = Math.round(Math.min(POP_W * 0.56, height * 0.4));
+  if (isCoarse || IS_HOST) {
+    let W = window.innerWidth, H = window.innerHeight;
+    POP_W = Math.round(Math.min(W - 32, 520));
+    POP_H = Math.round(Math.min(POP_W * 0.56, H * 0.4));
     HUE_H = 34;
   } else { POP_W = 176; POP_H = 120; HUE_H = 16; }
   let dpr = window.devicePixelRatio || 1;
@@ -1844,7 +1846,7 @@ function sizePicker() {
 function buildColorPop() {
   colorPop = document.createElement('div');
   colorPop.id = 'colorPop';
-  if (isCoarse) { colorPop.classList.add('sheetMode'); }
+  if (isCoarse || IS_HOST) { colorPop.classList.add('sheetMode'); }
   let grab = document.createElement('div'); grab.className = 'grab';
   colorPop.appendChild(grab);
   popSV = document.createElement('canvas'); popHue = document.createElement('canvas'); popHue.className = 'hue';
@@ -1900,9 +1902,15 @@ function drawPicker() {
   h.lineWidth = 2 * dpr; h.strokeStyle = '#fff'; h.strokeRect(hx - 3 * dpr, 1 * dpr, 6 * dpr, HH - 2 * dpr);
 }
 function applyPicker() {
-  if (pickTarget < 0 || pickTarget >= points.length) { closePicker(); return; }
   let c = hsv2rgb(popHSV[0], popHSV[1], popHSV[2]).map(function (v) { return Math.round(constrain(v, 0, 255)); });
-  points[pickTarget].r = c[0]; points[pickTarget].g = c[1]; points[pickTarget].b = c[2];
+  if (IS_HOST) {
+    // 親のシート：色は編集している枠へ送る
+    if (!hostPick) { closePicker(); return; }
+    try { hostPick.frame.contentWindow.postMessage({ type: 'pickColor', rgb: c }, '*'); } catch (err) {}
+  } else {
+    if (pickTarget < 0 || pickTarget >= points.length) { closePicker(); return; }
+    points[pickTarget].r = c[0]; points[pickTarget].g = c[1]; points[pickTarget].b = c[2];
+  }
   popSw.style.background = 'rgb(' + c.join(',') + ')';
   popHex.textContent = '#' + hex2(c[0]) + hex2(c[1]) + hex2(c[2]);
   drawPicker();
@@ -1914,6 +1922,13 @@ function openPickerAt(i, x, y) {
   let p = points[i], hsv = rgb2hsv(p.r, p.g, p.b);
   // 無彩色のときは色相が決まらないので、前の色相を引き継ぐ
   popHSV = [hsv[1] < 1e-4 ? popHSV[0] : hsv[0], hsv[1], hsv[2]];
+  if (isCoarse && IS_PANE && paneMulti) {
+    // 分割中のタッチ：枠の下からでは小さいので、親が画面全体の下から大きなシートを出す（色は pickColor で届く）
+    remotePick = true;
+    toHost({ type: 'pickOpen', hsv: popHSV });
+    toHost({ type: 'picker', on: true });
+    return;
+  }
   if (isCoarse) {
     // タッチ：下からせり出す（位置は CSS が決める）。描いてから開くと、せり出す途中から色が見える
     applyPicker();
@@ -1939,9 +1954,36 @@ function openPickerAt(i, x, y) {
   applyPicker();
 }
 function closePicker() {
+  if (IS_HOST) {
+    if (colorPop) { colorPop.classList.remove('open'); }
+    if (hostPick) {
+      try { hostPick.frame.contentWindow.postMessage({ type: 'pickClosed' }, '*'); } catch (err) {}
+      hostPick.div.classList.remove('picking');
+    }
+    hostPick = null;
+    return;
+  }
+  if (remotePick) { toHost({ type: 'pickClose' }); toHost({ type: 'picker', on: false }); remotePick = false; }
   if (colorPop && colorPop.classList.contains('open') && isCoarse) { toHost({ type: 'picker', on: false }); }
   if (colorPop) { colorPop.classList.remove('open'); }
   pickTarget = -1;
+}
+let remotePick = false, remoteSheetTop = null;   // 子：親のシートで編集中か／そのシートの上端（この枠の座標）
+let hostPick = null;                              // 親：シートで編集している枠
+// 親：子から頼まれて、画面全体の下からシートを出す
+function hostOpenPicker(q, hsv) {
+  if (!colorPop) { buildColorPop(); }
+  if (hostPick && hostPick !== q) { closePicker(); }
+  sizePicker();
+  hostPick = q;
+  popHSV = [+hsv[0] || 0, +hsv[1] || 0, +hsv[2] || 0];
+  applyPicker();
+  requestAnimationFrame(function () {
+    colorPop.classList.add('open');
+    // シートの上端を枠の座標で知らせる（枠がキーストーンをシートの上へ持ち上げる）
+    let top = window.innerHeight - colorPop.offsetHeight - q.rect.y;
+    try { q.frame.contentWindow.postMessage({ type: 'pickSheet', top: top }, '*'); } catch (err) {}
+  });
 }
 
 function keyPressed(ev) {
@@ -2034,6 +2076,18 @@ function initPaneMessaging() {
       if (gainSlider) { gainSlider.value = String(hdrGain); }
     }
     else if (d.type === 'lumaCommit') { commitLuma(); }
+    else if (d.type === 'pickColor' && remotePick && Array.isArray(d.rgb)) {
+      if (pickTarget >= 0 && pickTarget < points.length) {
+        points[pickTarget].r = +d.rgb[0]; points[pickTarget].g = +d.rgb[1]; points[pickTarget].b = +d.rgb[2];
+      }
+    }
+    else if (d.type === 'pickSheet' && remotePick && pickTarget >= 0 && pickTarget < points.length) {
+      liftGoal = computeLift(pickTarget, +d.top);
+    }
+    else if (d.type === 'pickClosed') {
+      if (remotePick) { toHost({ type: 'picker', on: false }); }
+      remotePick = false; pickTarget = -1;
+    }
     else if (d.type === 'gcheck') {
       gcheck = { on: !!d.on, gray: +d.gray || 0, x: +d.x || 0, y: +d.y || 0, s: +d.s || 0 };
     }
@@ -2164,6 +2218,10 @@ function buildHost() {
 
   buildGlobalUI();
   buildInfoUI(hostBar);
+  // 色選びのシートの外（共通バーなど）に触れたら閉じる。枠の中のタップは、その枠が閉じてと知らせてくる
+  document.addEventListener('pointerdown', function (ev) {
+    if (hostPick && colorPop && !colorPop.contains(ev.target)) { closePicker(); }
+  });
   document.addEventListener('keydown', function (ev) {
     if (ev.key === 'Escape') {
       if (globalPop) { globalPop.classList.remove('open'); globalBtn.classList.remove('active'); }
@@ -2304,6 +2362,7 @@ function hostApplyLuma(kind) {
 let hostActive = null;
 function hostSetActive(q) {
   if (!q || q === hostActive) { return; }
+  if (hostPick && q !== hostPick) { closePicker(); }   // 別の枠に触れたら、色選びのシートを閉じる
   hostActive = q;
   hostPanes.forEach(function (p) { p.div.classList.toggle('active', p === q); });
   hostPanes.forEach(hostSendActive);
@@ -2379,6 +2438,7 @@ function removePane(pane) {
   hostReplaceNode(sp, sib);
   sib.parent = sp.parent;
   hostPanes = hostPanes.filter(function (q) { return q !== pane; });
+  if (hostPick === pane) { hostPick = null; if (colorPop) { colorPop.classList.remove('open'); } }
   pane.div.remove();
   hostUpdateKinds();
   hostSyncPanes();
@@ -2664,6 +2724,12 @@ function onHostMessage(ev) {
     if (hostStateWaiters[d.id]) { hostStateWaiters[d.id](d.state); }
   } else if (d.type === 'play') {
     hostSetPlay(!!d.on, !!d.asked);
+  } else if (d.type === 'pickOpen' && Array.isArray(d.hsv)) {
+    let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
+    if (me) { hostOpenPicker(me, d.hsv); }
+  } else if (d.type === 'pickClose') {
+    let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
+    if (me && me === hostPick) { hostPick = null; if (colorPop) { colorPop.classList.remove('open'); } }
   } else if (d.type === 'picker') {
     let me = hostPanes.filter(function (q) { return q.frame.contentWindow === ev.source; })[0];
     if (me) { me.div.classList.toggle('picking', !!d.on); }
@@ -2681,7 +2747,15 @@ function onHostMessage(ev) {
 function hostSetPlay(on, fsDone) {
   playMode = on;
   document.body.classList.toggle('playing', on);
-  if (on) { maybeShowWakeNotice(); } else { hideWakeNotice(); }
+  if (on) {
+    wakeNoticeShownThisPlay = false;
+    maybeShowWakeNotice();
+    // フルスクリーンにした操作で取り直しを始めたばかりのときは、結果を少し待ってから確かめる
+    // （取り直しの返事が来ないまま＝防げていない、とみなす）
+    setTimeout(function () {
+      if (playMode && wakeState !== 'on' && wakeNotice && !wakeNotice.classList.contains('open') && !wakeNoticeShownThisPlay) { forceWakeNotice(); }
+    }, 1500);
+  } else { hideWakeNotice(); }
   hostBroadcast({ type: 'setPlay', on: on });
   try {
     if (on && !fsDone && !hostFsElement()) {
@@ -2794,8 +2868,14 @@ function setWakeState(s) {
 let wakeNoticeTimer = null;
 // 防げないと分かったのがフルスクリーンの最中（フルスクリーンにした操作で確かめた場合など）なら、そのとき出す
 function showWakeNotice() { if (playMode) { maybeShowWakeNotice(); } }
+let wakeNoticeShownThisPlay = false;
 function maybeShowWakeNotice() {
   if (!wakeNotice || wakeState === 'on' || wakeState === 'pending') { return; }
+  forceWakeNotice();
+}
+function forceWakeNotice() {
+  if (!wakeNotice) { return; }
+  wakeNoticeShownThisPlay = true;
   wakeNotice.classList.add('open');
   clearTimeout(wakeNoticeTimer);
   wakeNoticeTimer = setTimeout(hideWakeNotice, 5000);

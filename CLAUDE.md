@@ -54,6 +54,7 @@ CLAUDE.md           このファイル
   - 針の線：分割中は、選ばれていない枠では出さない（色点と同じ `keyA` で出し入れ。1枠のときと、つかんでいる間は常に出す）
   - 見え方の更新（`updateKeyVisibility()`）は `drawPlayhead()` の中で毎フレーム呼ぶ
 - **色の変更**：キーストーンをタップ（マウスはダブルクリック）すると、アプリ内の色選び（`#colorPop`：彩度×明度の面＋色相の帯、HSB）が出る（`openPickerAt()`）。マウスはキーストーンに被らない位置の小さなパネル、タッチは画面の下からせり出すシート（`.sheetMode`、幅いっぱい、`sizePicker()`）。シート中は親の＋と×を隠す（`picker` メッセージ → `.pane.picking`）。シートを開くと、リングをシートの上へ持ち上げる（`computeLift()`・`liftRing()`。大きさは変えず、まるごと入るならシートの上の空きの中央へ、入らなければ編集中のキーストーンがシートの上端から 28px 上に来る所まで。`baseR`・`baseCy` が元の位置で、`sheetT` で少し弾むように動かす）。`isCanvasEvent()` はリングのキャンバス（`mainCanvasElt`）だけを見る（色選びの面も canvas なので、iPhone のタッチの知らせで閉じていた）。パネルではタッチ・マウスの知らせを `stopPropagation` する。隠した `input type=color` をプログラムから開く方式は iPhone で開かなかったので廃止。パネルの外を押すと閉じるだけで、色点の追加はしない
+  - 分割中のタッチ端末では、枠の下からのシートでは小さいので、子は `pickOpen`（HSV）を親へ送り、親が画面全体の下から大きなシートを出す（`hostOpenPicker()`、`body.host #colorPop` は最前面）。動かした色は `pickColor` で子へ、シートの上端は `pickSheet`（枠の座標）で子へ送り、子はそれで `computeLift(i, top)` してキーストーンをシートの上に持ち上げる。閉じるのは、シートの「閉じる」・枠のタップ（子→`pickClose`）・シートの外・別の枠に触れたとき
 - **アイコン**：一時停止・再生は SVG（`ICON_PAUSE`・`ICON_PLAY`）。⏸ ▶ の文字は iPhone で絵文字になるので使わない
 - **回転方向の逆転**：時間バーの ↻ ボタン（`revBtn`、タイムラインごと）。`reversed` のとき `getPhase()` が逆向きに進む。位相を直接いじる箇所（針のドラッグ、秒数変更、複製）は必ず `setPhase(ph)` を通す（`t0` を直接計算すると逆転時に位置が飛ぶ）
 - **補間8方式**（`MODE_LIST`）：`step` ステップ切替／`hsb` HSB色相回転／`rgbLight` RGB中間混色（光量平均）／`rgbValue` RGB中間混色（画素値平均）／`oklch` OKLab 色相回転／`oklabLin` OKLab 中間混色／`cielch` CIELab 色相回転／`cielabLin` CIELab 中間混色。**デフォルトは `oklabLin`**
@@ -65,7 +66,7 @@ CLAUDE.md           このファイル
 - **フルスクリーン**：UIを消して色のみを表示。クリック／Escで復帰
 - **情報パネル**：右上の丸iボタン。操作説明と色変換の注意事項
 
-- **スリープ防止**：Screen Wake Lock。読み込み時に要求し、拒否されたら最初の操作（pointerdown／keydown）で取り直す。タブ復帰（`visibilitychange`）でも取り直す。状態は `wakeState`（pending／on／unsupported／failed）で、情報パネルの `#wakeStatus` に出る。非対応、または操作起点の要求が拒否されているときは、フルスクリーンにするたびに、画面の下端に小さな通知 `#wakeNotice`（！＋文言＋×）を出し、5秒で消す（× でも閉じる）。以前は画面全体を暗転させるオーバーレイを最初の操作で出していたが、強すぎて怖いと言われた
+- **スリープ防止**：Screen Wake Lock。読み込み時に要求し、拒否されたら最初の操作（pointerdown／keydown）で取り直す。タブ復帰（`visibilitychange`）でも取り直す。状態は `wakeState`（pending／on／unsupported／failed）で、情報パネルの `#wakeStatus` に出る。非対応、または操作起点の要求が拒否されているときは、フルスクリーンにするたびに、画面の下端に小さな通知 `#wakeNotice`（！＋文言＋×）を出し、5秒で消す（× でも閉じる）。フルスクリーンにした操作で取り直しを始めたばかりで状態が決まらないときは、1.5秒後にもう一度確かめ、まだ有効でなければ出す。以前は画面全体を暗転させるオーバーレイを最初の操作で出していたが、強すぎて怖いと言われた
 - **PWA**：`manifest.webmanifest` ＋ `sw.js`。自サイトのファイルはネットワーク優先（更新を即反映）、届かないときだけキャッシュ。HTTP キャッシュも `no-cache` で毎回確かめる（親ページと枠の iframe で版が食い違うと、やり取りの形が合わず壊れるため。実際に古い iframe が残った）。`sw.js` のキャッシュ対象を変えたら `CACHE` の版名を上げる
 
 - **画面分割**：`index.html` は2つの役割で動く。通常の起動は**親（`IS_HOST`）**で、タイムラインは持たず、`#panes` に iframe（`index.html?pane=1`＝**子、`IS_PANE`**）を並べる。起動時に子を1つ作る

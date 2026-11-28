@@ -450,6 +450,7 @@ function drawDiag(cur) {
     'dpr ' + (window.devicePixelRatio || 1) + '・枠 ' + window.innerWidth + '×' + window.innerHeight,
     'gpu ' + g.width + '×' + g.height + '（' + g.style.display + '）',
     'HDR画面 ' + mm('(dynamic-range: high)') + '・P3 ' + mm('(color-gamut: p3)'),
+    'コマ ' + (Math.round(frameClock / (1000 / 30)) % 10000) + '・時計差 ' + (performance.timeOrigin - CLOCK_BASE).toFixed(1) + 'ms',
     '色 ' + cur.map(function (v) { return v.toFixed(1); }).join(', ') + (gcheckOn() ? '・グレー ' + gcheck.gray.toFixed(2) : '')
   ];
   ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
@@ -532,7 +533,16 @@ let hdrGain = 1.6;          // HDR時の輝度倍率（SDR白=1.0を超える持
 let t0 = 0, paused = false, pausedAt = 0;   // t0・pausedAt は clockMs() の時刻（全枠で共通の絶対時刻 ms）
 // 今のコマの時刻。描画中は全枠で同じ値（下の tick() が画面更新ごとに決める）、それ以外は今の時刻
 let frameClock = null;
-function clockMs() { return frameClock !== null ? frameClock : performance.timeOrigin + performance.now(); }
+// 時計の基準：壁時計（Date.now）に合わせた、この文書の performance.now() の 0 の時刻。
+// 枠（iframe）ごとの performance.timeOrigin は、ブラウザによっては文書ごとにずれる（iPhone の Safari で、
+// 上下に並んだ枠の境目に、色の流れの速さに比例した段差が出ていた）。壁時計はどの枠でも共通なので、それに合わせる。
+// Date.now() はミリ秒刻みなので、刻みが変わった瞬間を捉えて合わせる
+const CLOCK_BASE = (function () {
+  let d0 = Date.now(), d = d0, n = performance.now(), guard = 0;
+  while (d === d0 && guard++ < 200000) { d = Date.now(); n = performance.now(); }
+  return d - n;
+})();
+function clockMs() { return frameClock !== null ? frameClock : CLOCK_BASE + performance.now(); }
 
 let cx, cy, R, hitR = 24, isCoarse = false;
 /* リングまわりの寸法（ここを変えれば見た目を調整できる）
@@ -645,7 +655,7 @@ function setup() {
   (function tick(ts) {
     requestAnimationFrame(tick);
     if (ts === undefined) { return; }
-    let k = Math.floor((performance.timeOrigin + ts) / TICK_MS);
+    let k = Math.floor((CLOCK_BASE + ts) / TICK_MS);
     if (k === lastTick) { return; }
     lastTick = k;
     frameClock = k * TICK_MS;

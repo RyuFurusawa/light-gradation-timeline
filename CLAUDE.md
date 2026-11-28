@@ -40,7 +40,7 @@ CLAUDE.md           このファイル
 - **描画のエラー**：`renderer.draw` が失敗しても、すぐに別の方式へ落とさない（以前は一度のエラーでその枠だけ永久に P3／sRGB になっていた）。そのコマは描かずに `onRenderError()` で WebGPU を準備し直し、続けて4回失敗したときだけ HDR をあきらめる（`hdrBroken`）。GPU が失われたとき（`device.lost`）も同じ
 - **リングと色点の色は背景と同じ基準で描く**：HDR のときは、リングの色の帯と色点の色を WebGPU のシェーダで背景の上に重ねる（`ringGpu`：2D を描く `draw()` の前半で集め、同じコマの `renderer.draw()` へ渡す。帯は `RING_N`(360) 点の表、色点は最大 `RING_MAXP`(48) 個。どちらも線形×`hdrGain`）。2D のキャンバスは SDR の白を超えられず、iPhone ではリングが背景より暗く見えていたため。針・白い縁・文字は 2D のままで、色点の場所は `destination-out` で透かす。P3 のときは、リングのキャンバスを `display-p3` で作り、色を `ptCol()`（`color(display-p3 …)`）で描く（背景と同じく、値を P3 の座標として扱う）
 - **HDR判定**：`(dynamic-range: high)` メディアクエリでゲートする（WebGPU の configure は SDR ディスプレイでも成功してしまうため）。`change` イベントを監視し `refreshRenderer()` で動的に追従。非HDR時は HDR輝度スライダー（`gainWrap`）を隠す
-- **駆動**：`noLoop()` + `requestAnimationFrame` で、30コマ/秒の刻み（`TICK_MS`）ごとに `redraw()`。描画中の時刻 `frameClock` はその刻みに丸めた絶対時刻（`performance.timeOrigin + rAF の時刻`）で、同じページの枠（iframe）では全部同じ値になる。位相は `clockMs()` 基準（`t0`・`pausedAt` も絶対時刻）。`millis()` は位相に使わない（タップの間隔判定だけ）
+- **駆動**：`noLoop()` + `requestAnimationFrame` で、30コマ/秒の刻み（`TICK_MS`）ごとに `redraw()`。描画中の時刻 `frameClock` はその刻みに丸めた絶対時刻（`CLOCK_BASE + rAF の時刻`）で、同じページの枠（iframe）では全部同じ値になる。`CLOCK_BASE` は壁時計（Date.now）に合わせた performance.now() の 0 の時刻（読み込み時に Date.now の刻みが変わる瞬間で合わせる）。`performance.timeOrigin` は文書ごとにずれうる（iPhone の Safari で、上下に並んだ枠の境目に段差が出ていた疑い）ので使わない。診断（`?diag=1`）の「時計差」は timeOrigin と CLOCK_BASE の差。位相は `clockMs()` 基準（`t0`・`pausedAt` も絶対時刻）。`millis()` は位相に使わない（タップの間隔判定だけ）
 
 ## 機能（実装済み）
 
